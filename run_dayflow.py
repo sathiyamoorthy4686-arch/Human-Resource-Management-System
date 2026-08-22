@@ -1166,6 +1166,8 @@ def index_page():
                                 <table>
                                     <thead>
                                         <tr>
+                                            <th>Employee Name</th>
+                                            <th>Dayflow ID</th>
                                             <th>Date</th>
                                             <th>Check In</th>
                                             <th>Check Out</th>
@@ -2120,10 +2122,12 @@ def index_page():
             const empAttSummaryTable = document.getElementById('empAttendanceSummaryTable');
             if (empAttSummaryTable && !isMasterAdmin) {
                 if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
-                    empAttSummaryTable.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">No check-in logs for today yet. Use the <strong>Check In</strong> button above!</td></tr>`;
+                    empAttSummaryTable.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted);">No check-in logs for today yet. Use the <strong>Check In</strong> button above!</td></tr>`;
                 } else {
                     empAttSummaryTable.innerHTML = appState.attendance_logs.map(a => `
                         <tr>
+                            <td><strong style="color:white;">${a.employee_name || (emp ? emp.name : u.name)}</strong></td>
+                            <td><span style="font-family:'JetBrains Mono';color:var(--primary-light);font-weight:600;">${a.dayflow_emp_id || (emp ? emp.dayflow_emp_id : 'DF-XXXX')}</span></td>
                             <td>${a.date || (a.check_in ? a.check_in.split(' ')[0] : '—')}</td>
                             <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in || '—'}</span></td>
                             <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
