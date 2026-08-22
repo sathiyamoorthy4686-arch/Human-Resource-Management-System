@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Master Administrator Setup
+Dayflow HRMS - Master Administrator & Data Deletion Capabilities
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
-Clean state: Ready to provision employees, track attendance, and manage organization workflows.
+Features:
+- Delete individual attendance logs
+- Clear all attendance logs
+- Delete provisioned employees & accounts
+- Reset passwords & manage compensation
 """
 
 import os
@@ -102,6 +106,12 @@ class ResetPasswordPayload(BaseModel):
     email: str
     new_password: str
 
+class DeleteLogPayload(BaseModel):
+    log_id: int
+
+class DeleteEmployeePayload(BaseModel):
+    employee_id: int
+
 class LeaveRequestPayload(BaseModel):
     leave_type: str
     date_from: str
@@ -186,7 +196,7 @@ def login_user(payload: LoginPayload):
         }
     }
 
-# ================= HR EXCLUSIVE: CREATE EMPLOYEE EMAIL ID & ACCOUNT =================
+# ================= HR EXCLUSIVE: CREATE & DELETE EMPLOYEE =================
 
 @app.post("/api/admin/create_employee")
 def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional[str] = Header(None)):
@@ -265,6 +275,60 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
             "department": payload.department
         }
     }
+
+@app.post("/api/admin/delete_employee")
+def hr_delete_employee(payload: DeleteEmployeePayload, authorization: Optional[str] = Header(None)):
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can delete employee records.")
+
+    emp = next((e for e in DB["employees"] if e["id"] == payload.employee_id), None)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Employee not found.")
+
+    if emp["work_email"] == MASTER_EMAIL or emp["id"] == 1:
+        raise HTTPException(status_code=400, detail="Cannot delete Master HR Administrator account.")
+
+    # Remove user account
+    if emp["work_email"] in DB["users"]:
+        del DB["users"][emp["work_email"]]
+
+    # Remove attendance logs
+    DB["attendance_logs"] = [a for a in DB["attendance_logs"] if a.get("employee_id") != emp["id"] and a.get("dayflow_emp_id") != emp["dayflow_emp_id"]]
+
+    # Remove leaves
+    DB["leaves"] = [l for l in DB["leaves"] if l.get("employee_id") != emp["id"]]
+
+    # Remove from employee list
+    DB["employees"] = [e for e in DB["employees"] if e["id"] != emp["id"]]
+
+    return {"success": True, "message": f"Employee {emp['name']} ({emp['dayflow_emp_id']}) and associated records have been permanently deleted."}
+
+# ================= ATTENDANCE LOG DELETION ENDPOINTS =================
+
+@app.post("/api/admin/delete_attendance_log")
+def hr_delete_attendance_log(payload: DeleteLogPayload, authorization: Optional[str] = Header(None)):
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can delete attendance logs.")
+
+    initial_len = len(DB["attendance_logs"])
+    DB["attendance_logs"] = [a for a in DB["attendance_logs"] if a.get("id") != payload.log_id]
+
+    if len(DB["attendance_logs"]) == initial_len:
+        raise HTTPException(status_code=404, detail=f"Attendance log #{payload.log_id} not found.")
+
+    return {"success": True, "message": f"Attendance log #{payload.log_id} has been deleted."}
+
+@app.post("/api/admin/clear_attendance_logs")
+def hr_clear_all_attendance_logs(authorization: Optional[str] = Header(None)):
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can clear attendance logs.")
+
+    count = len(DB["attendance_logs"])
+    DB["attendance_logs"] = []
+    return {"success": True, "message": f"Successfully deleted all {count} attendance log entries."}
 
 @app.post("/api/admin/reset_password")
 def hr_reset_password(payload: ResetPasswordPayload, authorization: Optional[str] = Header(None)):
@@ -700,6 +764,7 @@ def index_page():
         .btn-primary { background: var(--primary-gradient); color: white; box-shadow: var(--shadow-glow); }
         .btn-primary:hover { opacity: 0.92; transform: translateY(-1px); }
         .btn-danger { background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; }
+        .btn-danger:hover { opacity: 0.9; }
         .btn-success { background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: white; }
         .btn-secondary { background: #0f172a; border: 1px solid var(--border); color: var(--text-main); }
         .btn-secondary:hover { background: var(--bg-card-hover); border-color: var(--primary-light); }
@@ -800,15 +865,13 @@ def index_page():
                         <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to HRMS
                     </button>
 
-                    <!-- Quick Demo Accounts (Dynamically lists all users!) -->
+                    <!-- Quick Demo Accounts -->
                     <div class="demo-pills">
                         <div class="demo-pills-title">
                             <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In</span>
                             <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">1 account</span>
                         </div>
-                        <div class="pill-grid" id="quickUsersList">
-                            <!-- Populated dynamically -->
-                        </div>
+                        <div class="pill-grid" id="quickUsersList"></div>
                     </div>
                 </form>
             </div>
@@ -1152,9 +1215,14 @@ def index_page():
                             <i class="fa-solid fa-clock-rotate-left" style="color:var(--primary-light);"></i>
                             <span id="attCardHeading">Attendance Logs &amp; Classification</span>
                         </div>
-                        <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="fetchState()">
-                            <i class="fa-solid fa-rotate"></i> Refresh Logs
-                        </button>
+                        <div style="display:flex;gap:0.5rem;align-items:center;">
+                            <button class="btn btn-danger" id="hrClearAllLogsBtn" style="font-size:0.78rem;padding:0.35rem 0.75rem;" onclick="clearAllAttendanceLogs()">
+                                <i class="fa-solid fa-trash-can"></i> Clear All Logs
+                            </button>
+                            <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="fetchState()">
+                                <i class="fa-solid fa-rotate"></i> Refresh Logs
+                            </button>
+                        </div>
                     </div>
                     <div class="card-body" style="padding:0;">
                         <table>
@@ -1169,6 +1237,7 @@ def index_page():
                                     <th>Check Out</th>
                                     <th>Status</th>
                                     <th>Worked</th>
+                                    <th id="attActionHeader">Action</th>
                                 </tr>
                             </thead>
                             <tbody id="attendanceLogsTable"></tbody>
@@ -1651,6 +1720,57 @@ def index_page():
             }
         }
 
+        async function deleteAttendanceLog(logId) {
+            if (!confirm(`Are you sure you want to delete Attendance Log #${logId}?`)) return;
+            try {
+                const res = await fetch('/api/admin/delete_attendance_log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                    body: JSON.stringify({ log_id: logId })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to delete log');
+                showToast(data.message);
+                fetchState();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function clearAllAttendanceLogs() {
+            if (!confirm("Are you sure you want to clear ALL attendance logs?")) return;
+            try {
+                const res = await fetch('/api/admin/clear_attendance_logs', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${sessionToken}` }
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to clear logs');
+                showToast(data.message);
+                fetchState();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
+        async function deleteEmployee(empId, empName) {
+            if (!confirm(`Are you sure you want to completely delete employee '${empName}' (and their user account, attendance logs, and leaves)?`)) return;
+            try {
+                const res = await fetch('/api/admin/delete_employee', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                    body: JSON.stringify({ employee_id: empId })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.detail || 'Failed to delete employee');
+                showToast(data.message);
+                fetchState();
+                populateQuickUsers();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
+
         async function handleResetPassword(email, name) {
             const newPw = prompt(`Enter new password for ${name} (${email}):`, "Dayflow@" + Math.floor(1000 + Math.random() * 9000));
             if (!newPw) return;
@@ -1833,6 +1953,8 @@ def index_page():
             const rbacNotice = document.getElementById('rbacNoticeText');
             const hrHeaderBtn = document.getElementById('hrCreateEmpHeaderBtn');
             const hrAddEmpBtnTab = document.getElementById('hrAddEmpBtnTab');
+            const hrClearAllLogsBtn = document.getElementById('hrClearAllLogsBtn');
+            const attActionHeader = document.getElementById('attActionHeader');
 
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
@@ -1847,6 +1969,9 @@ def index_page():
                 
                 hrHeaderBtn.style.display = 'inline-flex';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'inline-flex';
+                if (hrClearAllLogsBtn) hrClearAllLogsBtn.style.display = 'inline-flex';
+                if (attActionHeader) attActionHeader.style.display = 'table-cell';
+
                 document.getElementById('attCardHeading').innerText = 'All Staff Attendance Logs (Organization Wide)';
                 document.getElementById('attTabTitle').innerText = 'Company-Wide Attendance Monitoring';
                 document.getElementById('attTabSub').innerText = 'Live overview of active check-ins, worked hours, and daily attendance records.';
@@ -1869,6 +1994,9 @@ def index_page():
 
                 hrHeaderBtn.style.display = 'none';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'none';
+                if (hrClearAllLogsBtn) hrClearAllLogsBtn.style.display = 'none';
+                if (attActionHeader) attActionHeader.style.display = 'none';
+
                 document.getElementById('attCardHeading').innerText = 'My Personal Attendance Logs';
                 document.getElementById('attTabTitle').innerText = 'My Workday Attendance';
                 document.getElementById('attTabSub').innerText = 'Your personal check-in/out timestamps and worked hours.';
@@ -1991,15 +2119,15 @@ def index_page():
                 `;
             }
 
-            // Attendance Logs Table
+            // Attendance Logs Table (with Individual Delete buttons)
             const attTable = document.getElementById('attendanceLogsTable');
             if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
                 attTable.innerHTML = `
                     <tr>
-                        <td colspan="9" style="text-align:center;padding:3rem 1.5rem;">
+                        <td colspan="10" style="text-align:center;padding:3rem 1.5rem;">
                             <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
                                 <i class="fa-solid fa-clock-rotate-left" style="font-size:2.2rem;color:var(--primary-light);opacity:0.6;"></i>
-                                <h4 style="font-size:1.05rem;color:white;">No attendance records found yet</h4>
+                                <h4 style="font-size:1.05rem;color:white;">No attendance records found</h4>
                                 <p style="font-size:0.85rem;color:var(--text-muted);max-width:400px;">
                                     Click <strong>Check In</strong> above to record your attendance for today's workday!
                                 </p>
@@ -2021,11 +2149,18 @@ def index_page():
                             <td><strong style="color:white;">${a.employee_name}</strong></td>
                             <td><span style="font-family:'JetBrains Mono';color:var(--primary-light);">${a.dayflow_emp_id || 'DF-XXXX'}</span></td>
                             <td><span style="font-size:0.82rem;color:var(--text-muted);">${a.department || 'General'}</span></td>
-                            <td>${a.date || a.check_in.split(' ')[0]}</td>
-                            <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in}</span></td>
+                            <td>${a.date || (a.check_in ? a.check_in.split(' ')[0] : '—')}</td>
+                            <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in || '—'}</span></td>
                             <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
                             <td><span class="badge ${badgeClass}">${a.status}</span></td>
                             <td><strong style="font-family:'JetBrains Mono';">${a.worked_hours}</strong></td>
+                            ${isAdm ? `
+                                <td>
+                                    <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteAttendanceLog(${a.id})">
+                                        <i class="fa-solid fa-trash"></i> Delete
+                                    </button>
+                                </td>
+                            ` : ``}
                         </tr>
                     `;
                 }).join('');
@@ -2055,6 +2190,7 @@ def index_page():
                 }
             }
 
+            // Employee Directory Table (with Delete Employee option)
             const empsTable = document.getElementById('employeesTable');
             if (empsTable) {
                 empsTable.innerHTML = appState.all_employees.map(e => `
@@ -2072,6 +2208,11 @@ def index_page():
                                     <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
                                         <i class="fa-solid fa-key"></i> Reset Pwd
                                     </button>
+                                    ${e.id !== 1 ? `
+                                        <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteEmployee(${e.id}, '${e.name}')">
+                                            <i class="fa-solid fa-trash"></i> Delete
+                                        </button>
+                                    ` : ``}
                                 </div>
                             ` : `<span style="font-size:0.75rem;color:var(--text-muted);">Active</span>`}
                         </td>
@@ -2142,7 +2283,8 @@ if __name__ == "__main__":
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Password: {MASTER_PASS_PLAIN})")
-    print("   * Clean Employee Directory - Ready to Provision Employees")
+    print("   * Attendance Log Deletion (Individual & Clear All)")
+    print("   * Employee Profile Deletion from Directory")
     print("   * Real-Time Attendance & Role-Based Access Controls")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
