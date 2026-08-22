@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
 Dayflow HRMS - Authentication & RBAC Enabled Server
-With HR Employee Email Provisioning & Account Creation Workflow.
+Complete HR Employee Provisioning with Email ID, Custom Password Generator,
+Credential Management, and Role-Based Access Controls.
 """
 
 import os
 import json
 import uuid
+import random
+import string
 import hashlib
 from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict
@@ -28,6 +31,7 @@ DB = {
             "id": 1,
             "login": "alex.morgan@dayflow.demo",
             "password_hash": DEFAULT_PASS,
+            "password_plain": "dayflow123",
             "name": "Alex Morgan",
             "email": "alex.morgan@dayflow.demo",
             "role": "admin",
@@ -41,6 +45,7 @@ DB = {
             "id": 2,
             "login": "jordan.smith@dayflow.demo",
             "password_hash": DEFAULT_PASS,
+            "password_plain": "dayflow123",
             "name": "Jordan Smith",
             "email": "jordan.smith@dayflow.demo",
             "role": "employee",
@@ -54,6 +59,7 @@ DB = {
             "id": 3,
             "login": "taylor.reed@dayflow.demo",
             "password_hash": DEFAULT_PASS,
+            "password_plain": "dayflow123",
             "name": "Taylor Reed",
             "email": "taylor.reed@dayflow.demo",
             "role": "employee",
@@ -67,6 +73,7 @@ DB = {
             "id": 4,
             "login": "casey.patel@dayflow.demo",
             "password_hash": DEFAULT_PASS,
+            "password_plain": "dayflow123",
             "name": "Casey Patel",
             "email": "casey.patel@dayflow.demo",
             "role": "employee",
@@ -244,14 +251,6 @@ class LoginPayload(BaseModel):
     email: str
     password: str
 
-class RegisterPayload(BaseModel):
-    name: str
-    email: str
-    password: str
-    role: str
-    department: str
-    job_title: Optional[str] = "Team Member"
-
 class HRCreateEmployeePayload(BaseModel):
     name: str
     email: str
@@ -266,6 +265,10 @@ class HRCreateEmployeePayload(BaseModel):
     dayflow_emp_id: Optional[str] = None
     private_city: Optional[str] = "Headquarters"
     work_phone: Optional[str] = None
+
+class ResetPasswordPayload(BaseModel):
+    email: str
+    new_password: str
 
 class LeaveRequestPayload(BaseModel):
     leave_type: str
@@ -316,7 +319,7 @@ def login_user(payload: LoginPayload):
     if not user:
         raise HTTPException(status_code=401, detail="No account found with this email ID.")
     if user["password_hash"] != hash_pw(payload.password):
-        raise HTTPException(status_code=401, detail="Invalid password.")
+        raise HTTPException(status_code=401, detail="Invalid password credentials.")
     token = f"sess-{uuid.uuid4().hex[:16]}"
     DB["sessions"][token] = email
     return {
@@ -334,71 +337,6 @@ def login_user(payload: LoginPayload):
         }
     }
 
-@app.post("/api/auth/register")
-def register_user(payload: RegisterPayload):
-    global EMP_SEQ
-    email = payload.email.strip().lower()
-    if email in DB["users"]:
-        raise HTTPException(status_code=400, detail="An account with this email ID already exists.")
-    
-    is_admin = payload.role in ["admin", "hr_officer", "hr_manager"]
-    role_type = "admin" if is_admin else "employee"
-    role_label = "HR Administrator" if is_admin else f"Employee ({payload.job_title})"
-    
-    user_id = len(DB["users"]) + 1
-    emp_id_num = len(DB["employees"]) + 1
-    dayflow_id = f"DF-{EMP_SEQ}"
-    EMP_SEQ += 1
-
-    new_user = {
-        "id": user_id,
-        "login": email,
-        "password_hash": hash_pw(payload.password),
-        "name": payload.name.strip(),
-        "email": email,
-        "role": role_type,
-        "role_label": role_label,
-        "is_admin": is_admin,
-        "is_officer": is_admin,
-        "employee_id": emp_id_num,
-        "created_at": datetime.now().isoformat()
-    }
-    DB["users"][email] = new_user
-
-    new_employee = {
-        "id": emp_id_num,
-        "user_id": user_id,
-        "name": payload.name.strip(),
-        "dayflow_emp_id": dayflow_id,
-        "job_title": payload.job_title or "Team Member",
-        "department": payload.department or "General",
-        "work_email": email,
-        "work_phone": "+1 555-0" + str(100 + emp_id_num),
-        "mobile_phone": "+1 555-0" + str(200 + emp_id_num),
-        "private_city": "Remote",
-        "salary_amount": 6500.0,
-        "salary_type": "Monthly Fixed",
-        "bank_name": "Standard Chartered Bank",
-        "bank_account_no": f"US{emp_id_num * 11} •••• {emp_id_num * 99}",
-        "emergency_contact_name": "Primary Emergency Contact",
-        "emergency_contact_relation": "Family",
-        "emergency_contact_phone": "+1 555-0999",
-        "attendance_state": "checked_out",
-        "last_check_in": None,
-        "worked_hours": 0.0
-    }
-    DB["employees"].append(new_employee)
-
-    token = f"sess-{uuid.uuid4().hex[:16]}"
-    DB["sessions"][token] = email
-
-    return {
-        "success": True,
-        "message": f"Welcome to Dayflow, {payload.name}! Profile {dayflow_id} created.",
-        "token": token,
-        "user": new_user
-    }
-
 # ================= HR EXCLUSIVE: CREATE EMPLOYEE EMAIL ID & ACCOUNT =================
 
 @app.post("/api/admin/create_employee")
@@ -412,6 +350,10 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     if email in DB["users"]:
         raise HTTPException(status_code=400, detail="An employee with this Email ID already exists in the system.")
 
+    password_clean = payload.password.strip()
+    if not password_clean:
+        password_clean = "Dayflow@" + "".join(random.choices(string.digits, k=4))
+
     user_id = len(DB["users"]) + 1
     emp_id_num = len(DB["employees"]) + 1
     dayflow_id = payload.dayflow_emp_id.strip() if payload.dayflow_emp_id else f"DF-{EMP_SEQ}"
@@ -421,11 +363,12 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     role_type = "admin" if is_admin_role else "employee"
     role_label = "HR Administrator" if is_admin_role else f"Employee ({payload.job_title})"
 
-    # 1. Provision User Login Account
+    # 1. Provision User Login Account with password
     new_user = {
         "id": user_id,
         "login": email,
-        "password_hash": hash_pw(payload.password),
+        "password_hash": hash_pw(password_clean),
+        "password_plain": password_clean,
         "name": payload.name.strip(),
         "email": email,
         "role": role_type,
@@ -465,7 +408,36 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     return {
         "success": True,
         "message": f"Successfully created employee profile & email ID for {payload.name} ({email}) with Dayflow ID {dayflow_id}!",
-        "employee": new_emp
+        "employee": new_emp,
+        "credentials": {
+            "name": payload.name.strip(),
+            "email": email,
+            "password": password_clean,
+            "dayflow_emp_id": dayflow_id,
+            "role": role_label,
+            "department": payload.department
+        }
+    }
+
+@app.post("/api/admin/reset_password")
+def hr_reset_password(payload: ResetPasswordPayload, authorization: Optional[str] = Header(None)):
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can reset passwords.")
+
+    email = payload.email.strip().lower()
+    user = DB["users"].get(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="User account not found.")
+
+    user["password_hash"] = hash_pw(payload.new_password)
+    user["password_plain"] = payload.new_password
+
+    return {
+        "success": True,
+        "message": f"Password for {user['name']} ({email}) has been successfully updated to: {payload.new_password}",
+        "email": email,
+        "new_password": payload.new_password
     }
 
 @app.post("/api/auth/logout")
@@ -489,7 +461,15 @@ def get_state(authorization: Optional[str] = Header(None)):
         all_leaves = DB["leaves"]
         pending_leaves = [l for l in DB["leaves"] if l["state"] == "confirm"]
         salary_records = DB["employees"]
-        employees_list = DB["employees"]
+        
+        # Include current login password info for HR Management
+        employees_list = []
+        for e in DB["employees"]:
+            u = DB["users"].get(e["work_email"])
+            employees_list.append({
+                **e,
+                "login_password": u.get("password_plain", "dayflow123") if u else "dayflow123"
+            })
     else:
         attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == user["employee_id"]]
         all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == user["employee_id"]]
@@ -755,7 +735,6 @@ def index_page():
         .nav-item i { width: 20px; font-size: 1.1rem; text-align: center; }
 
         .nav-badge { margin-left: auto; background: var(--danger); color: white; font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; }
-
         .sidebar-footer { padding: 1rem; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; gap: 0.6rem; }
 
         /* Main Area */
@@ -868,6 +847,14 @@ def index_page():
 
         #toast { position: fixed; bottom: 2rem; right: 2rem; padding: 0.9rem 1.4rem; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--primary); box-shadow: var(--shadow-lg); color: white; font-weight: 600; font-size: 0.9rem; display: none; align-items: center; gap: 0.6rem; z-index: 20000; }
         .rbac-notice { background: rgba(99, 102, 241, 0.1); border: 1px dashed rgba(99, 102, 241, 0.4); border-radius: 10px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #c7d2fe; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.6rem; }
+
+        .copy-box {
+            background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.6rem 0.9rem; display: flex; align-items: center; justify-content: space-between;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; color: #cbd5e1; margin-bottom: 0.75rem;
+        }
+        .copy-btn { background: none; border: none; color: var(--primary-light); cursor: pointer; font-size: 0.9rem; padding: 0.2rem 0.5rem; }
+        .copy-btn:hover { color: white; }
     </style>
 </head>
 <body>
@@ -883,7 +870,7 @@ def index_page():
                         <span>Human Resource Portal</span>
                     </div>
                 </div>
-                <p style="font-size:0.82rem;color:var(--text-muted);">Sign in with your organizational credentials</p>
+                <p style="font-size:0.82rem;color:var(--text-muted);">Sign in with your employee email &amp; password</p>
             </div>
 
             <div class="auth-body">
@@ -993,9 +980,9 @@ def index_page():
                     <span id="headerStatusText">Checked In</span>
                 </div>
 
-                <!-- HR ONLY: PROVISION NEW EMPLOYEE BUTTON -->
+                <!-- HR ONLY: CREATE EMPLOYEE BUTTON -->
                 <button class="btn btn-success" id="hrCreateEmpHeaderBtn" style="font-size:0.82rem;padding:0.45rem 0.9rem;" onclick="openCreateEmpModal()">
-                    <i class="fa-solid fa-user-plus"></i> Create Employee Email ID
+                    <i class="fa-solid fa-user-plus"></i> Create New Employee &amp; Email ID
                 </button>
 
                 <div class="btn btn-secondary" style="padding:0.4rem 0.8rem;font-size:0.85rem;border-radius:9999px;" onclick="openAuthModal()">
@@ -1179,7 +1166,7 @@ def index_page():
                             Employee Directory
                         </div>
                         <button class="btn btn-success" id="hrAddEmpBtnTab" onclick="openCreateEmpModal()">
-                            <i class="fa-solid fa-user-plus"></i> Create Employee Email ID
+                            <i class="fa-solid fa-user-plus"></i> Create New Employee &amp; Email ID
                         </button>
                     </div>
                     <div class="card-body" style="padding:0;">
@@ -1193,6 +1180,7 @@ def index_page():
                                     <th>Official Email ID</th>
                                     <th>Location</th>
                                     <th>Status</th>
+                                    <th id="credentialsHeader">Credentials / Action</th>
                                 </tr>
                             </thead>
                             <tbody id="employeesTable"></tbody>
@@ -1280,7 +1268,7 @@ def index_page():
         </div>
     </main>
 
-    <!-- HR MODAL: CREATE EMPLOYEE EMAIL ID & ACCOUNT -->
+    <!-- HR MODAL: CREATE EMPLOYEE EMAIL ID & ACCOUNT WITH PASSWORD -->
     <div id="createEmpModal" class="modal-overlay">
         <div class="modal-card">
             <div class="modal-header">
@@ -1303,18 +1291,21 @@ def index_page():
                         </div>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-                        <div class="form-group">
-                            <label>Initial Login Password *</label>
-                            <input type="text" id="newEmpPassword" class="form-control" value="dayflow123" required>
+                    <!-- PASSWORD CONFIGURATION SECTION -->
+                    <div class="form-group" style="background:rgba(0,0,0,0.2);padding:0.9rem;border-radius:10px;border:1px solid var(--border);">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+                            <label style="color:white;font-weight:700;"><i class="fa-solid fa-key" style="color:var(--primary-light);"></i> Initial Login Password *</label>
+                            <button type="button" class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="generateStrongPassword()">
+                                <i class="fa-solid fa-dice"></i> Generate Random
+                            </button>
                         </div>
-                        <div class="form-group">
-                            <label>Security Access Role *</label>
-                            <select id="newEmpRole" class="form-control">
-                                <option value="employee">Employee (Self-Service)</option>
-                                <option value="hr_officer">HR Director / Administrator</option>
-                            </select>
+                        <div style="position:relative;display:flex;align-items:center;">
+                            <input type="text" id="newEmpPassword" class="form-control" style="font-family:'JetBrains Mono';padding-right:2.5rem;" value="Dayflow@2026" required>
+                            <i class="fa-solid fa-eye" id="pwdToggleIcon" style="position:absolute;right:0.9rem;cursor:pointer;color:var(--text-muted);" onclick="togglePasswordVisibility('newEmpPassword', 'pwdToggleIcon')"></i>
                         </div>
+                        <span style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;display:block;">
+                            The employee will use this password and their email ID to log in to the Dayflow HR portal.
+                        </span>
                     </div>
 
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
@@ -1331,18 +1322,21 @@ def index_page():
                         </div>
                         <div class="form-group">
                             <label>Job Title *</label>
-                            <input type="text" id="newEmpJobTitle" class="form-control" placeholder="e.g. Frontend Developer" required>
+                            <input type="text" id="newEmpJobTitle" class="form-control" placeholder="e.g. Senior QA Engineer" required>
                         </div>
                     </div>
 
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                         <div class="form-group">
-                            <label>Monthly Salary ($)</label>
-                            <input type="number" id="newEmpSalary" class="form-control" value="7000" min="1000" step="100">
+                            <label>Security Role *</label>
+                            <select id="newEmpRole" class="form-control">
+                                <option value="employee">Employee (Self-Service)</option>
+                                <option value="hr_officer">HR Director / Administrator</option>
+                            </select>
                         </div>
                         <div class="form-group">
-                            <label>Custom Dayflow ID (Optional)</label>
-                            <input type="text" id="newEmpDayflowId" class="form-control" placeholder="Auto-generated (e.g. DF-1005)">
+                            <label>Monthly Salary ($)</label>
+                            <input type="number" id="newEmpSalary" class="form-control" value="7500" min="1000" step="100">
                         </div>
                     </div>
 
@@ -1351,6 +1345,51 @@ def index_page():
                         <button type="submit" class="btn btn-success"><i class="fa-solid fa-user-check"></i> Provision Employee Account</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- SUCCESS CREDENTIALS MODAL -->
+    <div id="credentialsSuccessModal" class="modal-overlay">
+        <div class="modal-card" style="max-width:500px;">
+            <div class="modal-header" style="background:rgba(16,185,129,0.15);border-bottom:1px solid rgba(16,185,129,0.3);">
+                <h3 style="font-size:1.15rem;font-weight:700;color:var(--success);display:flex;align-items:center;gap:0.5rem;">
+                    <i class="fa-solid fa-circle-check"></i> Employee Account Created!
+                </h3>
+                <i class="fa-solid fa-xmark" style="cursor:pointer;font-size:1.2rem;" onclick="closeCredentialsModal()"></i>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.88rem;color:#cbd5e1;margin-bottom:1.25rem;">
+                    The employee has been provisioned. Share these login credentials with the team member:
+                </p>
+
+                <div class="form-group">
+                    <label>Employee Name &amp; ID</label>
+                    <div class="copy-box"><span id="succEmpName">Kavitha Murugan (DF-1005)</span></div>
+                </div>
+
+                <div class="form-group">
+                    <label>Official Email ID</label>
+                    <div class="copy-box">
+                        <span id="succEmpEmail">kavitha.m@dayflow.demo</span>
+                        <button class="copy-btn" onclick="copyText('succEmpEmail')"><i class="fa-solid fa-copy"></i> Copy</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label>Assigned Password</label>
+                    <div class="copy-box">
+                        <span id="succEmpPassword" style="color:var(--success);font-weight:700;">Dayflow@2026</span>
+                        <button class="copy-btn" onclick="copyText('succEmpPassword')"><i class="fa-solid fa-copy"></i> Copy</button>
+                    </div>
+                </div>
+
+                <div style="margin-top:1.5rem;display:flex;gap:0.75rem;">
+                    <button class="btn btn-primary" style="flex:1;" onclick="testLoginAsCreated()">
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign in as this Employee
+                    </button>
+                    <button class="btn btn-secondary" onclick="closeCredentialsModal()">Done</button>
+                </div>
             </div>
         </div>
     </div>
@@ -1406,12 +1445,19 @@ def index_page():
         let sessionToken = localStorage.getItem('dayflow_token') || 'session-alex-admin-token';
         let appState = null;
         let activeTab = 'dashboard';
+        let lastCreatedCredentials = null;
 
         function showToast(msg) {
             const toast = document.getElementById('toast');
             document.getElementById('toastMsg').innerText = msg;
             toast.style.display = 'flex';
             setTimeout(() => { toast.style.display = 'none'; }, 3500);
+        }
+
+        function copyText(elemId) {
+            const txt = document.getElementById(elemId).innerText;
+            navigator.clipboard.writeText(txt);
+            showToast("Copied to clipboard!");
         }
 
         function openAuthModal() { document.getElementById('authOverlay').style.display = 'flex'; }
@@ -1424,9 +1470,50 @@ def index_page():
             document.getElementById('createEmpModal').style.display = 'none';
         }
 
+        function openCredentialsModal(creds) {
+            lastCreatedCredentials = creds;
+            document.getElementById('succEmpName').innerText = `${creds.name} (${creds.dayflow_emp_id})`;
+            document.getElementById('succEmpEmail').innerText = creds.email;
+            document.getElementById('succEmpPassword').innerText = creds.password;
+            document.getElementById('credentialsSuccessModal').style.display = 'flex';
+        }
+
+        function closeCredentialsModal() {
+            document.getElementById('credentialsSuccessModal').style.display = 'none';
+        }
+
+        function testLoginAsCreated() {
+            if (!lastCreatedCredentials) return;
+            closeCredentialsModal();
+            quickFill(lastCreatedCredentials.email, lastCreatedCredentials.password);
+            openAuthModal();
+        }
+
+        function generateStrongPassword() {
+            const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%";
+            let pwd = "DF@";
+            for (let i = 0; i < 6; i++) {
+                pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            document.getElementById('newEmpPassword').value = pwd;
+            showToast("Generated strong password!");
+        }
+
+        function togglePasswordVisibility(inputId, iconId) {
+            const inp = document.getElementById(inputId);
+            const ico = document.getElementById(iconId);
+            if (inp.type === "password") {
+                inp.type = "text";
+                ico.className = "fa-solid fa-eye-slash";
+            } else {
+                inp.type = "password";
+                ico.className = "fa-solid fa-eye";
+            }
+        }
+
         function autoSuggestEmail(name) {
             if (!name) return;
-            const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, '.');
+            const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9 ]/g, '').replace(/\\s+/g, '.');
             document.getElementById('newEmpEmail').value = `${cleaned}@dayflow.demo`;
         }
 
@@ -1467,8 +1554,7 @@ def index_page():
                 role: document.getElementById('newEmpRole').value,
                 department: document.getElementById('newEmpDept').value,
                 job_title: document.getElementById('newEmpJobTitle').value,
-                salary_amount: parseFloat(document.getElementById('newEmpSalary').value) || 6500.0,
-                dayflow_emp_id: document.getElementById('newEmpDayflowId').value || null
+                salary_amount: parseFloat(document.getElementById('newEmpSalary').value) || 7500.0
             };
 
             try {
@@ -1481,13 +1567,29 @@ def index_page():
                 if (!res.ok) throw new Error(data.detail || 'Failed to create employee');
 
                 closeCreateEmpModal();
-                showToast(data.message);
-                alert(`✅ Employee Created Successfully!\n\nEmail ID: ${payload.email}\nPassword: ${payload.password}\nName: ${payload.name}\nDepartment: ${payload.department}\n\nThe employee can now sign in using these credentials.`);
                 document.getElementById('createEmpForm').reset();
+                document.getElementById('newEmpPassword').value = "Dayflow@2026";
+                openCredentialsModal(data.credentials);
                 fetchState();
             } catch (err) {
                 alert(err.message);
             }
+        }
+
+        async function handleResetPassword(email, name) {
+            const newPw = prompt(`Enter new password for ${name} (${email}):`, "Dayflow@" + Math.floor(1000 + Math.random() * 9000));
+            if (!newPw) return;
+
+            const res = await fetch('/api/admin/reset_password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                body: JSON.stringify({ email: email, new_password: newPw })
+            });
+            const data = await res.json();
+            if (!res.ok) return alert(data.detail || 'Password reset failed');
+            showToast(data.message);
+            alert(`✅ Password Updated for ${name}!\n\nEmail: ${email}\nNew Password: ${newPw}`);
+            fetchState();
         }
 
         async function handleLogout() {
@@ -1610,7 +1712,7 @@ def index_page():
                 'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Workspace', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
                 'attendance': [isAdm ? 'All Staff Attendance Logs' : 'My Attendance History', 'Daily check-in logs and status classification'],
                 'leaves': ['Time-Off & Leave Management', isAdm ? 'All leave applications and company-wide requests' : 'Your submitted leave requests and balances'],
-                'employees': ['Employee Directory', 'Organization team members and official email IDs'],
+                'employees': ['Employee Directory', 'Organization team members and login accounts'],
                 'salary': ['Compensation & Banking', isAdm ? 'Full company salary administration' : 'Your confidential compensation record'],
                 'profile': ['My Profile', 'Manage personal and emergency contact details']
             };
@@ -1645,7 +1747,7 @@ def index_page():
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> You have full organizational management and employee email provisioning privileges.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full organizational permissions and employee provisioning privileges.`;
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
                 hrHeaderBtn.style.display = 'inline-flex';
@@ -1653,7 +1755,7 @@ def index_page():
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
-                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope. Only your personal records are visible.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope.`;
                 document.getElementById('adminMetricsGrid').style.display = 'none';
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
                 hrHeaderBtn.style.display = 'none';
@@ -1769,6 +1871,15 @@ def index_page():
                     <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
                     <td>${e.private_city}</td>
                     <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
+                    <td>
+                        ${isAdm ? `
+                            <div style="display:flex;gap:0.4rem;align-items:center;">
+                                <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
+                                    <i class="fa-solid fa-key"></i> Reset Pwd
+                                </button>
+                            </div>
+                        ` : `<span style="font-size:0.75rem;color:var(--text-muted);">Active</span>`}
+                    </td>
                 </tr>
             `).join('');
 
@@ -1831,8 +1942,8 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
-    print("   * Clean Employee / HR Login Portal")
-    print("   * HR Portal: Create Employee Accounts & Email IDs")
+    print("   * Create New Employee & Email ID with Password Generator")
+    print("   * Employee Credential Copy Modal & Password Reset Workflow")
     print("   * RBAC Security: HR Director (Admin) vs Internal Employee")
     print("   * Real-time Attendance, Leaves & Compensation Management")
     print("===============================================================")
