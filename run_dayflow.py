@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Master Administrator & Data Deletion Capabilities
+Dayflow HRMS - Master Administrator & Role-Based Navigation
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
-Features:
-- Delete individual attendance logs
-- Clear all attendance logs
-- Delete provisioned employees & accounts
-- Reset passwords & manage compensation
+
+RBAC Navigation Rules:
+- HR Administrator (Sathiya Moorthy):
+  * Full Sidebar: Dashboard, Attendance, Time-Off & Leaves, Employee Directory, Compensation, My Profile
+- Employee (e.g. sathiya):
+  * Strictly Restricted Sidebar: ONLY Dashboard & My Profile
+  * Self-Service Profile: Edit Name, Email, Phone Number, Address, Emergency Contact
+  * Workday Check-In/Check-Out directly from Dashboard
 """
 
 import os
@@ -124,6 +127,8 @@ class LeaveActionPayload(BaseModel):
     comment: Optional[str] = ""
 
 class ProfileUpdatePayload(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
     work_phone: Optional[str] = None
     mobile_phone: Optional[str] = None
     private_city: Optional[str] = None
@@ -246,16 +251,16 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
         "job_title": payload.job_title,
         "department": payload.department,
         "work_email": email,
-        "work_phone": payload.work_phone or ("+1 555-0" + str(100 + emp_id_num)),
-        "mobile_phone": "+1 555-0" + str(200 + emp_id_num),
+        "work_phone": payload.work_phone or ("+91 98765-0" + str(100 + emp_id_num)),
+        "mobile_phone": "+91 98765-0" + str(200 + emp_id_num),
         "private_city": payload.private_city or "Headquarters",
         "salary_amount": float(payload.salary_amount or 6500.0),
         "salary_type": payload.salary_type or "Monthly Fixed",
-        "bank_name": payload.bank_name or "Silicon Valley Bank",
-        "bank_account_no": payload.bank_account_no or f"US{emp_id_num*17} •••• {emp_id_num*88}",
+        "bank_name": payload.bank_name or "State Bank of India",
+        "bank_account_no": payload.bank_account_no or f"IN{emp_id_num*17} •••• {emp_id_num*88}",
         "emergency_contact_name": "Emergency Contact",
         "emergency_contact_relation": "Family",
-        "emergency_contact_phone": "+1 555-0999",
+        "emergency_contact_phone": "+91 98765-0999",
         "attendance_state": "checked_out",
         "last_check_in": None,
         "worked_hours": 0.0
@@ -570,6 +575,30 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
+    old_email = user["email"]
+
+    # Update Name
+    if payload.name and payload.name.strip():
+        new_name = payload.name.strip()
+        user["name"] = new_name
+        emp["name"] = new_name
+
+    # Update Email
+    if payload.email and payload.email.strip():
+        new_email = payload.email.strip().lower()
+        if new_email != old_email and new_email in DB["users"]:
+            raise HTTPException(status_code=400, detail=f"Email ID '{new_email}' is already in use.")
+        if new_email != old_email:
+            user["email"] = new_email
+            user["login"] = new_email
+            emp["work_email"] = new_email
+            DB["users"][new_email] = user
+            del DB["users"][old_email]
+            # update active sessions
+            for k, v in list(DB["sessions"].items()):
+                if v == old_email:
+                    DB["sessions"][k] = new_email
+
     if payload.work_phone is not None: emp["work_phone"] = payload.work_phone
     if payload.mobile_phone is not None: emp["mobile_phone"] = payload.mobile_phone
     if payload.private_city is not None: emp["private_city"] = payload.private_city
@@ -577,7 +606,7 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
     if payload.emergency_contact_relation is not None: emp["emergency_contact_relation"] = payload.emergency_contact_relation
     if payload.emergency_contact_phone is not None: emp["emergency_contact_phone"] = payload.emergency_contact_phone
 
-    return {"success": True, "message": "Profile updated successfully!", "employee": emp}
+    return {"success": True, "message": "Profile details updated successfully!", "employee": emp, "user": user}
 
 @app.post("/api/admin/update_salary")
 def update_salary(payload: AdminSalaryUpdatePayload, authorization: Optional[str] = Header(None)):
@@ -890,28 +919,34 @@ def index_page():
 
         <div class="nav-group">
             <div class="nav-label">Workspace</div>
-            <a class="nav-item active" onclick="switchTab('dashboard')">
+            
+            <!-- Dashboard (Visible to Everyone: HR Admin & Employees) -->
+            <a class="nav-item active" id="nav-dashboard" onclick="switchTab('dashboard')">
                 <i class="fa-solid fa-chart-pie"></i>
                 <span>Dashboard</span>
             </a>
-            <a class="nav-item" onclick="switchTab('attendance')">
+
+            <!-- HR EXCLUSIVE MANAGEMENT TABS (Hidden for regular Employees) -->
+            <a class="nav-item hr-only-tab" id="nav-attendance" onclick="switchTab('attendance')">
                 <i class="fa-solid fa-clock"></i>
                 <span>Attendance</span>
             </a>
-            <a class="nav-item" onclick="switchTab('leaves')">
+            <a class="nav-item hr-only-tab" id="nav-leaves" onclick="switchTab('leaves')">
                 <i class="fa-solid fa-calendar-check"></i>
                 <span>Time-Off &amp; Leaves</span>
                 <span class="nav-badge" id="pendingBadge" style="display:none;">0</span>
             </a>
-            <a class="nav-item" onclick="switchTab('employees')">
+            <a class="nav-item hr-only-tab" id="nav-employees" onclick="switchTab('employees')">
                 <i class="fa-solid fa-users"></i>
                 <span>Employee Directory</span>
             </a>
-            <a class="nav-item" onclick="switchTab('salary')">
+            <a class="nav-item hr-only-tab" id="nav-salary" onclick="switchTab('salary')">
                 <i class="fa-solid fa-wallet"></i>
                 <span>Compensation</span>
             </a>
-            <a class="nav-item" onclick="switchTab('profile')">
+
+            <!-- My Profile (Visible to Everyone: HR Admin & Employees) -->
+            <a class="nav-item" id="nav-profile" onclick="switchTab('profile')">
                 <i class="fa-solid fa-user-gear"></i>
                 <span>My Profile</span>
             </a>
@@ -958,11 +993,11 @@ def index_page():
 
         <div class="content">
 
-            <!-- Hero Attendance Banner -->
+            <!-- Hero Attendance Banner (Check In / Check Out) -->
             <div class="hero-card">
                 <div class="hero-left">
                     <h3 id="greetingText">Good day, Sathiya Moorthy!</h3>
-                    <p id="heroSubText">Track attendance, manage workflows, and oversee organizational policies with RBAC precision.</p>
+                    <p id="heroSubText">Track attendance and manage your workday seamlessly.</p>
                 </div>
                 <div class="attendance-toggle-box">
                     <div class="time-display">
@@ -980,7 +1015,7 @@ def index_page():
             <div id="tab-dashboard" class="tab-pane">
                 <div class="rbac-notice" id="rbacNoticeBar">
                     <i class="fa-solid fa-lock"></i>
-                    <span id="rbacNoticeText">RBAC Active: You have Full HR Management privileges.</span>
+                    <span id="rbacNoticeText">RBAC Active: HR Director / Administrator.</span>
                 </div>
 
                 <!-- HR ADMIN METRICS GRID -->
@@ -1047,18 +1082,18 @@ def index_page():
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-title">My Pending Requests</span>
-                            <div class="metric-icon icon-purple"><i class="fa-solid fa-hourglass-half"></i></div>
+                            <span class="metric-title">My Attendance Status</span>
+                            <div class="metric-icon icon-purple"><i class="fa-solid fa-fingerprint"></i></div>
                         </div>
-                        <div class="metric-value" id="empPendingLeavesMetric">0</div>
-                        <div class="metric-sub">Awaiting HR decision</div>
+                        <div class="metric-value" id="empTodayStatusMetric" style="font-size:1.35rem;">Present</div>
+                        <div class="metric-sub">Daily workday record</div>
                     </div>
                 </div>
 
                 <!-- Dashboard Content Grid -->
                 <div class="grid-2" style="margin-top: 1.5rem;">
                     
-                    <!-- LEFT COLUMN: HR Queue OR Employee Leaves -->
+                    <!-- LEFT COLUMN: HR Queue OR Employee Workday Summary -->
                     <div style="display:flex;flex-direction:column;gap:1.5rem;">
                         
                         <!-- HR Pending Approvals Queue -->
@@ -1117,29 +1152,26 @@ def index_page():
                             </div>
                         </div>
 
-                        <!-- EMPLOYEE TIME-OFF HISTORY CARD -->
-                        <div class="card" id="empLeavesHistoryCard" style="display:none;">
+                        <!-- EMPLOYEE WORKDAY SUMMARY CARD -->
+                        <div class="card" id="empWorkdaySummaryCard" style="display:none;">
                             <div class="card-header">
                                 <div class="card-title">
-                                    <i class="fa-solid fa-calendar-check" style="color:var(--primary-light);"></i>
-                                    My Time-Off Requests &amp; Status
+                                    <i class="fa-solid fa-calendar-day" style="color:var(--primary-light);"></i>
+                                    My Workday &amp; Punch Log
                                 </div>
-                                <button class="btn btn-primary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openLeaveModal()">
-                                    <i class="fa-solid fa-plus"></i> Request Time-Off
-                                </button>
                             </div>
                             <div class="card-body" style="padding:0;">
                                 <table>
                                     <thead>
                                         <tr>
-                                            <th>Leave Type</th>
-                                            <th>Dates</th>
-                                            <th>Days</th>
+                                            <th>Date</th>
+                                            <th>Check In</th>
+                                            <th>Check Out</th>
                                             <th>Status</th>
-                                            <th>Manager Feedback</th>
+                                            <th>Worked</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="empLeavesTable"></tbody>
+                                    <tbody id="empAttendanceSummaryTable"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -1154,6 +1186,9 @@ def index_page():
                                     <i class="fa-solid fa-id-card-clip" style="color:var(--accent);"></i>
                                     Profile Summary
                                 </div>
+                                <button class="btn btn-secondary" style="font-size:0.75rem;padding:0.25rem 0.5rem;" onclick="switchTab('profile')">
+                                    <i class="fa-solid fa-pen"></i> Edit
+                                </button>
                             </div>
                             <div class="card-body">
                                 <div class="info-list" id="profileSummaryList"></div>
@@ -1172,13 +1207,10 @@ def index_page():
                                 <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="toggleAttendance()">
                                     <i class="fa-solid fa-fingerprint" style="color:var(--primary-light);"></i> Toggle Check-In / Check-Out
                                 </button>
-                                <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="openLeaveModal()">
-                                    <i class="fa-solid fa-calendar-plus" style="color:var(--accent);"></i> Submit Time-Off Request
-                                </button>
                                 <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="switchTab('profile')">
                                     <i class="fa-solid fa-user-pen" style="color:var(--success);"></i> Update My Profile Details
                                 </button>
-                                <button class="btn btn-danger" style="justify-content:flex-start;margin-top:0.4rem;font-size:0.8rem;" onclick="handleResetAllData()">
+                                <button class="btn btn-danger" id="hrResetDbBtn" style="justify-content:flex-start;margin-top:0.4rem;font-size:0.8rem;" onclick="handleResetAllData()">
                                     <i class="fa-solid fa-trash-can"></i> Reset Database (Clear Test Data)
                                 </button>
                             </div>
@@ -1188,7 +1220,7 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Attendance -->
+            <!-- Tab: Attendance (HR Only) -->
             <div id="tab-attendance" class="tab-pane" style="display:none;">
                 <div class="att-banner">
                     <div style="display:flex;align-items:center;gap:1rem;">
@@ -1196,9 +1228,9 @@ def index_page():
                             <i class="fa-solid fa-business-time"></i>
                         </div>
                         <div>
-                            <h3 style="font-size:1.15rem;font-weight:700;" id="attTabTitle">Daily Attendance Record</h3>
-                            <p style="font-size:0.82rem;color:var(--text-muted);" id="attTabSub">
-                                Real-time check-in, check-out timestamps, and automatic status classification.
+                            <h3 style="font-size:1.15rem;font-weight:700;">Company-Wide Attendance Monitoring</h3>
+                            <p style="font-size:0.82rem;color:var(--text-muted);">
+                                Live overview of active check-ins, worked hours, and daily attendance records.
                             </p>
                         </div>
                     </div>
@@ -1213,10 +1245,10 @@ def index_page():
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-clock-rotate-left" style="color:var(--primary-light);"></i>
-                            <span id="attCardHeading">Attendance Logs &amp; Classification</span>
+                            <span>All Staff Attendance Logs (Organization Wide)</span>
                         </div>
                         <div style="display:flex;gap:0.5rem;align-items:center;">
-                            <button class="btn btn-danger" id="hrClearAllLogsBtn" style="font-size:0.78rem;padding:0.35rem 0.75rem;" onclick="clearAllAttendanceLogs()">
+                            <button class="btn btn-danger" style="font-size:0.78rem;padding:0.35rem 0.75rem;" onclick="clearAllAttendanceLogs()">
                                 <i class="fa-solid fa-trash-can"></i> Clear All Logs
                             </button>
                             <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="fetchState()">
@@ -1237,7 +1269,7 @@ def index_page():
                                     <th>Check Out</th>
                                     <th>Status</th>
                                     <th>Worked</th>
-                                    <th id="attActionHeader">Action</th>
+                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody id="attendanceLogsTable"></tbody>
@@ -1246,7 +1278,7 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Leaves -->
+            <!-- Tab: Leaves (HR Only) -->
             <div id="tab-leaves" class="tab-pane" style="display:none;">
                 <div class="card">
                     <div class="card-header">
@@ -1277,7 +1309,7 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Employees -->
+            <!-- Tab: Employees (HR Only) -->
             <div id="tab-employees" class="tab-pane" style="display:none;">
                 <div class="card">
                     <div class="card-header">
@@ -1285,7 +1317,7 @@ def index_page():
                             <i class="fa-solid fa-address-book" style="color:var(--primary-light);"></i>
                             Employee Directory
                         </div>
-                        <button class="btn btn-success" id="hrAddEmpBtnTab" onclick="openCreateEmpModal()">
+                        <button class="btn btn-success" onclick="openCreateEmpModal()">
                             <i class="fa-solid fa-user-plus"></i> Create New Employee &amp; Email ID
                         </button>
                     </div>
@@ -1300,7 +1332,7 @@ def index_page():
                                     <th>Official Email ID</th>
                                     <th>Location</th>
                                     <th>Status</th>
-                                    <th id="credentialsHeader">Credentials / Action</th>
+                                    <th>Credentials / Action</th>
                                 </tr>
                             </thead>
                             <tbody id="employeesTable"></tbody>
@@ -1309,7 +1341,7 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Salary -->
+            <!-- Tab: Salary (HR Only) -->
             <div id="tab-salary" class="tab-pane" style="display:none;">
                 <div class="card">
                     <div class="card-header">
@@ -1337,36 +1369,49 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Profile Settings -->
+            <!-- Tab: Profile Settings (Visible to Everyone) -->
             <div id="tab-profile" class="tab-pane" style="display:none;">
                 <div class="card" style="max-width:720px;margin:0 auto;">
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-user-pen" style="color:var(--primary-light);"></i>
-                            Self-Service Profile Information
+                            My Profile Information &amp; Contact Details
                         </div>
                     </div>
                     <div class="card-body">
                         <form id="profileForm" onsubmit="saveProfile(event)">
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                                 <div class="form-group">
+                                    <label>Full Name *</label>
+                                    <input type="text" id="profFullName" class="form-control" placeholder="Your Name" required>
+                                </div>
+                                <div class="form-group">
+                                    <label>Official Email ID *</label>
+                                    <input type="email" id="profEmail" class="form-control" placeholder="your.name@dayflow.demo" required>
+                                </div>
+                            </div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                                <div class="form-group">
                                     <label>Work Phone</label>
                                     <input type="text" id="profWorkPhone" class="form-control" placeholder="+91 98765-XXXXX">
                                 </div>
                                 <div class="form-group">
-                                    <label>Mobile Phone</label>
+                                    <label>Mobile Phone *</label>
                                     <input type="text" id="profMobilePhone" class="form-control" placeholder="+91 98765-XXXXX">
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>Private City / Location</label>
-                                <input type="text" id="profCity" class="form-control" placeholder="City">
+                                <label>Address / Private City *</label>
+                                <input type="text" id="profCity" class="form-control" placeholder="Residential City &amp; Address">
                             </div>
-                            <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem;color:var(--primary-light);">Emergency Contact Details</h4>
+                            
+                            <h4 style="margin:1.25rem 0 0.75rem;font-size:0.95rem;color:var(--primary-light);display:flex;align-items:center;gap:0.5rem;">
+                                <i class="fa-solid fa-phone-volume"></i> Emergency Contact Details
+                            </h4>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                                 <div class="form-group">
                                     <label>Contact Name</label>
-                                    <input type="text" id="profEmergName" class="form-control" placeholder="Full Name">
+                                    <input type="text" id="profEmergName" class="form-control" placeholder="Emergency Contact Full Name">
                                 </div>
                                 <div class="form-group">
                                     <label>Relationship</label>
@@ -1374,11 +1419,11 @@ def index_page():
                                 </div>
                             </div>
                             <div class="form-group">
-                                <label>Emergency Phone</label>
+                                <label>Emergency Phone Number</label>
                                 <input type="text" id="profEmergPhone" class="form-control" placeholder="+91 98765-XXXXX">
                             </div>
                             <button type="submit" class="btn btn-primary" style="margin-top:0.5rem;width:100%;">
-                                <i class="fa-solid fa-floppy-disk"></i> Save Profile Details
+                                <i class="fa-solid fa-floppy-disk"></i> Update Profile Information
                             </button>
                         </form>
                     </div>
@@ -1403,11 +1448,11 @@ def index_page():
                     <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                         <div class="form-group">
                             <label>Employee Full Name *</label>
-                            <input type="text" id="newEmpName" class="form-control" placeholder="e.g. Kavitha Murugan" oninput="autoSuggestEmail(this.value)" required>
+                            <input type="text" id="newEmpName" class="form-control" placeholder="e.g. Sathya" oninput="autoSuggestEmail(this.value)" required>
                         </div>
                         <div class="form-group">
                             <label>Assigned Official Email ID *</label>
-                            <input type="email" id="newEmpEmail" class="form-control" placeholder="kavitha.m@dayflow.demo" required>
+                            <input type="email" id="newEmpEmail" class="form-control" placeholder="sathya@dayflow.demo" required>
                         </div>
                     </div>
 
@@ -1424,7 +1469,7 @@ def index_page():
                             <i class="fa-solid fa-eye" id="pwdToggleIcon" style="position:absolute;right:0.9rem;cursor:pointer;color:var(--text-muted);" onclick="togglePasswordVisibility('newEmpPassword', 'pwdToggleIcon')"></i>
                         </div>
                         <span style="font-size:0.72rem;color:var(--text-muted);margin-top:0.3rem;display:block;">
-                            The employee will use this password and their email ID to log in to the Dayflow HR portal.
+                            The employee will use this password and email ID to sign in.
                         </span>
                     </div>
 
@@ -1442,7 +1487,7 @@ def index_page():
                         </div>
                         <div class="form-group">
                             <label>Job Title *</label>
-                            <input type="text" id="newEmpJobTitle" class="form-control" placeholder="e.g. Senior QA Engineer" required>
+                            <input type="text" id="newEmpJobTitle" class="form-control" placeholder="e.g. Software Engineer" required>
                         </div>
                     </div>
 
@@ -1485,13 +1530,13 @@ def index_page():
 
                 <div class="form-group">
                     <label>Employee Name &amp; ID</label>
-                    <div class="copy-box"><span id="succEmpName">Kavitha Murugan (DF-1002)</span></div>
+                    <div class="copy-box"><span id="succEmpName">Sathya (DF-1002)</span></div>
                 </div>
 
                 <div class="form-group">
                     <label>Official Email ID</label>
                     <div class="copy-box">
-                        <span id="succEmpEmail">kavitha.m@dayflow.demo</span>
+                        <span id="succEmpEmail">sathya@dayflow.demo</span>
                         <button class="copy-btn" onclick="copyText('succEmpEmail')"><i class="fa-solid fa-copy"></i> Copy</button>
                     </div>
                 </div>
@@ -1891,6 +1936,8 @@ def index_page():
         async function saveProfile(e) {
             e.preventDefault();
             const payload = {
+                name: document.getElementById('profFullName').value,
+                email: document.getElementById('profEmail').value,
                 work_phone: document.getElementById('profWorkPhone').value,
                 mobile_phone: document.getElementById('profMobilePhone').value,
                 private_city: document.getElementById('profCity').value,
@@ -1904,6 +1951,7 @@ def index_page():
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
+            if (!res.ok) return alert(data.detail || 'Failed to update profile');
             showToast(data.message);
             fetchState();
         }
@@ -1911,19 +1959,21 @@ def index_page():
         function switchTab(tabId) {
             activeTab = tabId;
             document.querySelectorAll('.tab-pane').forEach(el => el.style.display = 'none');
-            document.getElementById('tab-' + tabId).style.display = 'block';
+            const targetPane = document.getElementById('tab-' + tabId);
+            if (targetPane) targetPane.style.display = 'block';
 
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            if (event && event.currentTarget) event.currentTarget.classList.add('active');
+            const activeNav = document.getElementById('nav-' + tabId);
+            if (activeNav) activeNav.classList.add('active');
 
             const isAdm = appState && appState.is_admin;
             const titles = {
                 'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Dashboard', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
-                'attendance': [isAdm ? 'All Staff Attendance Logs' : 'My Attendance History', 'Daily check-in logs and status classification'],
-                'leaves': ['Time-Off & Leave Management', isAdm ? 'All leave applications and company-wide requests' : 'Your submitted leave requests and balances'],
+                'attendance': ['Company Attendance Logs', 'Daily check-in logs and status classification'],
+                'leaves': ['Time-Off & Leave Management', 'All leave applications and company-wide requests'],
                 'employees': ['Employee Directory', 'Organization team members and login accounts'],
-                'salary': ['Compensation & Banking', isAdm ? 'Full company salary administration' : 'Your confidential compensation record'],
-                'profile': ['My Profile', 'Manage personal and emergency contact details']
+                'salary': ['Compensation & Banking', 'Full company salary administration'],
+                'profile': ['My Profile', 'Manage your personal details, email, and emergency contacts']
             };
             if (titles[tabId]) {
                 document.getElementById('pageTitle').innerHTML = `${titles[tabId][0]} ${isAdm ? '<span class="role-pill admin"><i class="fa-solid fa-shield-halved"></i> HR Admin</span>' : '<span class="role-pill employee"><i class="fa-solid fa-user"></i> Employee</span>'}`;
@@ -1952,54 +2002,51 @@ def index_page():
             const roleBadge = document.getElementById('headerRoleBadge');
             const rbacNotice = document.getElementById('rbacNoticeText');
             const hrHeaderBtn = document.getElementById('hrCreateEmpHeaderBtn');
-            const hrAddEmpBtnTab = document.getElementById('hrAddEmpBtnTab');
-            const hrClearAllLogsBtn = document.getElementById('hrClearAllLogsBtn');
-            const attActionHeader = document.getElementById('attActionHeader');
+            const hrResetDbBtn = document.getElementById('hrResetDbBtn');
+
+            // HIDE/SHOW SIDEBAR TABS BY ROLE (CRITICAL RBAC RULE!)
+            const hrTabs = document.querySelectorAll('.hr-only-tab');
+            if (isAdm) {
+                hrTabs.forEach(el => el.style.display = 'flex');
+            } else {
+                hrTabs.forEach(el => el.style.display = 'none');
+                if (['attendance', 'leaves', 'employees', 'salary'].includes(activeTab)) {
+                    switchTab('dashboard');
+                }
+            }
 
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Full organizational access and employee provisioning privileges.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Full organization management privileges.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('employeeMetricsGrid').style.display = 'none';
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
                 document.getElementById('hrRecentLoginsCard').style.display = 'flex';
-                document.getElementById('empLeavesHistoryCard').style.display = 'none';
+                document.getElementById('empWorkdaySummaryCard').style.display = 'none';
                 
                 hrHeaderBtn.style.display = 'inline-flex';
-                if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'inline-flex';
-                if (hrClearAllLogsBtn) hrClearAllLogsBtn.style.display = 'inline-flex';
-                if (attActionHeader) attActionHeader.style.display = 'table-cell';
-
-                document.getElementById('attCardHeading').innerText = 'All Staff Attendance Logs (Organization Wide)';
-                document.getElementById('attTabTitle').innerText = 'Company-Wide Attendance Monitoring';
-                document.getElementById('attTabSub').innerText = 'Live overview of active check-ins, worked hours, and daily attendance records.';
+                if (hrResetDbBtn) hrResetDbBtn.style.display = 'inline-flex';
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
-                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.name : u.name} - ${emp ? emp.job_title : 'Team Member'}).</strong> Self-service portal.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'none';
                 document.getElementById('employeeMetricsGrid').style.display = 'grid';
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
                 document.getElementById('hrRecentLoginsCard').style.display = 'none';
-                document.getElementById('empLeavesHistoryCard').style.display = 'flex';
+                document.getElementById('empWorkdaySummaryCard').style.display = 'flex';
 
                 document.getElementById('empWorkedHoursMetric').innerText = em.worked_today || '0.0 hrs';
                 document.getElementById('empAttendanceStatusSub').innerText = `Status: ${emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}`;
                 document.getElementById('empPtoMetric').innerText = `${em.pto_balance} Days`;
                 document.getElementById('empSickMetric').innerText = `${em.sick_balance} Days`;
-                document.getElementById('empPendingLeavesMetric').innerText = em.my_pending_leaves || '0';
+                document.getElementById('empTodayStatusMetric').innerText = emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Present';
 
                 hrHeaderBtn.style.display = 'none';
-                if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'none';
-                if (hrClearAllLogsBtn) hrClearAllLogsBtn.style.display = 'none';
-                if (attActionHeader) attActionHeader.style.display = 'none';
-
-                document.getElementById('attCardHeading').innerText = 'My Personal Attendance Logs';
-                document.getElementById('attTabTitle').innerText = 'My Workday Attendance';
-                document.getElementById('attTabSub').innerText = 'Your personal check-in/out timestamps and worked hours.';
+                if (hrResetDbBtn) hrResetDbBtn.style.display = 'none';
             }
 
             const isCheckedIn = emp && emp.attendance_state === 'checked_in';
@@ -2077,26 +2124,21 @@ def index_page():
                 `).join('');
             }
 
-            // Employee Personal Leaves Table
-            const empLeavesTable = document.getElementById('empLeavesTable');
-            if (empLeavesTable && !isAdm) {
-                if (!appState.all_leaves || appState.all_leaves.length === 0) {
-                    empLeavesTable.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">You have not submitted any time-off requests yet. Click <strong>Request Time-Off</strong> to apply!</td></tr>`;
+            // Employee Workday Summary Table (In Dashboard)
+            const empAttSummaryTable = document.getElementById('empAttendanceSummaryTable');
+            if (empAttSummaryTable && !isAdm) {
+                if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
+                    empAttSummaryTable.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">No check-in logs for today yet. Use the <strong>Check In</strong> button above!</td></tr>`;
                 } else {
-                    empLeavesTable.innerHTML = appState.all_leaves.map(l => {
-                        let badgeCls = 'badge-pending';
-                        if (l.state === 'validate') badgeCls = 'badge-approved';
-                        if (l.state === 'refuse') badgeCls = 'badge-refused';
-                        return `
-                            <tr>
-                                <td><strong>${l.type}</strong></td>
-                                <td>${l.date_from} &rarr; ${l.date_to}</td>
-                                <td><strong>${l.number_of_days} Days</strong></td>
-                                <td><span class="badge ${badgeCls}">${l.state_label}</span></td>
-                                <td><span style="color:var(--primary-light);font-size:0.82rem;">${l.manager_comment || 'Pending HR review'}</span></td>
-                            </tr>
-                        `;
-                    }).join('');
+                    empAttSummaryTable.innerHTML = appState.attendance_logs.map(a => `
+                        <tr>
+                            <td>${a.date || (a.check_in ? a.check_in.split(' ')[0] : '—')}</td>
+                            <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in || '—'}</span></td>
+                            <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
+                            <td><span class="badge badge-approved">${a.status}</span></td>
+                            <td><strong style="font-family:'JetBrains Mono';">${a.worked_hours}</strong></td>
+                        </tr>
+                    `).join('');
                 }
             }
 
@@ -2104,12 +2146,12 @@ def index_page():
             const pList = document.getElementById('profileSummaryList');
             if (emp) {
                 pList.innerHTML = `
+                    <div class="info-item"><span class="info-label">Name</span><span class="info-val">${emp.name}</span></div>
                     <div class="info-item"><span class="info-label">Dayflow ID</span><span class="info-val" style="font-family:'JetBrains Mono';color:var(--primary-light);">${emp.dayflow_emp_id}</span></div>
-                    <div class="info-item"><span class="info-label">Job Title</span><span class="info-val">${emp.job_title}</span></div>
-                    <div class="info-item"><span class="info-label">Department</span><span class="info-val">${emp.department}</span></div>
                     <div class="info-item"><span class="info-label">Official Email</span><span class="info-val">${emp.work_email}</span></div>
-                    <div class="info-item"><span class="info-label">Location</span><span class="info-val">${emp.private_city}</span></div>
-                    <div class="info-item"><span class="info-label">Compensation</span><span class="info-val" style="color:var(--success);">$${emp.salary_amount.toLocaleString()}.00/mo</span></div>
+                    <div class="info-item"><span class="info-label">Mobile Phone</span><span class="info-val">${emp.mobile_phone || '—'}</span></div>
+                    <div class="info-item"><span class="info-label">Location / Address</span><span class="info-val">${emp.private_city}</span></div>
+                    <div class="info-item"><span class="info-label">Department</span><span class="info-val">${emp.department}</span></div>
                 `;
             } else {
                 pList.innerHTML = `
@@ -2119,80 +2161,53 @@ def index_page():
                 `;
             }
 
-            // Attendance Logs Table (with Individual Delete buttons)
+            // Populate Self-Service Profile Form
+            document.getElementById('profFullName').value = emp ? emp.name : u.name;
+            document.getElementById('profEmail').value = emp ? emp.work_email : u.email;
+            if (emp) {
+                document.getElementById('profWorkPhone').value = emp.work_phone || '';
+                document.getElementById('profMobilePhone').value = emp.mobile_phone || '';
+                document.getElementById('profCity').value = emp.private_city || '';
+                document.getElementById('profEmergName').value = emp.emergency_contact_name || '';
+                document.getElementById('profEmergRel').value = emp.emergency_contact_relation || '';
+                document.getElementById('profEmergPhone').value = emp.emergency_contact_phone || '';
+            }
+
+            // Attendance Logs Table (HR Tab)
             const attTable = document.getElementById('attendanceLogsTable');
-            if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
-                attTable.innerHTML = `
-                    <tr>
-                        <td colspan="10" style="text-align:center;padding:3rem 1.5rem;">
-                            <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
-                                <i class="fa-solid fa-clock-rotate-left" style="font-size:2.2rem;color:var(--primary-light);opacity:0.6;"></i>
-                                <h4 style="font-size:1.05rem;color:white;">No attendance records found</h4>
-                                <p style="font-size:0.85rem;color:var(--text-muted);max-width:400px;">
-                                    Click <strong>Check In</strong> above to record your attendance for today's workday!
-                                </p>
-                                <button class="btn btn-primary" style="margin-top:0.4rem;" onclick="toggleAttendance()">
-                                    <i class="fa-solid fa-fingerprint"></i> Check In Now
-                                </button>
-                            </div>
-                        </td>
-                    </tr>
-                `;
-            } else {
-                attTable.innerHTML = appState.attendance_logs.map(a => {
-                    const isPresent = (a.status || '').toLowerCase().includes('present');
-                    const isHalf = (a.status || '').toLowerCase().includes('half');
-                    let badgeClass = isPresent ? 'badge-approved' : (isHalf ? 'badge-pending' : 'badge-info');
-                    return `
-                        <tr>
-                            <td><strong style="color:var(--text-muted);">#${a.id}</strong></td>
-                            <td><strong style="color:white;">${a.employee_name}</strong></td>
-                            <td><span style="font-family:'JetBrains Mono';color:var(--primary-light);">${a.dayflow_emp_id || 'DF-XXXX'}</span></td>
-                            <td><span style="font-size:0.82rem;color:var(--text-muted);">${a.department || 'General'}</span></td>
-                            <td>${a.date || (a.check_in ? a.check_in.split(' ')[0] : '—')}</td>
-                            <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in || '—'}</span></td>
-                            <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
-                            <td><span class="badge ${badgeClass}">${a.status}</span></td>
-                            <td><strong style="font-family:'JetBrains Mono';">${a.worked_hours}</strong></td>
-                            ${isAdm ? `
+            if (attTable && isAdm) {
+                if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
+                    attTable.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:3rem 1.5rem;color:var(--text-muted);">No attendance records found.</td></tr>`;
+                } else {
+                    attTable.innerHTML = appState.attendance_logs.map(a => {
+                        const isPresent = (a.status || '').toLowerCase().includes('present');
+                        const isHalf = (a.status || '').toLowerCase().includes('half');
+                        let badgeClass = isPresent ? 'badge-approved' : (isHalf ? 'badge-pending' : 'badge-info');
+                        return `
+                            <tr>
+                                <td><strong style="color:var(--text-muted);">#${a.id}</strong></td>
+                                <td><strong style="color:white;">${a.employee_name}</strong></td>
+                                <td><span style="font-family:'JetBrains Mono';color:var(--primary-light);">${a.dayflow_emp_id || 'DF-XXXX'}</span></td>
+                                <td><span style="font-size:0.82rem;color:var(--text-muted);">${a.department || 'General'}</span></td>
+                                <td>${a.date || (a.check_in ? a.check_in.split(' ')[0] : '—')}</td>
+                                <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in || '—'}</span></td>
+                                <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
+                                <td><span class="badge ${badgeClass}">${a.status}</span></td>
+                                <td><strong style="font-family:'JetBrains Mono';">${a.worked_hours}</strong></td>
                                 <td>
                                     <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteAttendanceLog(${a.id})">
                                         <i class="fa-solid fa-trash"></i> Delete
                                     </button>
                                 </td>
-                            ` : ``}
-                        </tr>
-                    `;
-                }).join('');
-            }
-
-            const allLeavesTable = document.getElementById('allLeavesTable');
-            if (allLeavesTable) {
-                if (!appState.all_leaves || appState.all_leaves.length === 0) {
-                    allLeavesTable.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted);">No leave records found. Click <strong>Request Time-Off</strong> to submit!</td></tr>`;
-                } else {
-                    allLeavesTable.innerHTML = appState.all_leaves.map(l => {
-                        let badgeCls = 'badge-pending';
-                        if (l.state === 'validate') badgeCls = 'badge-approved';
-                        if (l.state === 'refuse') badgeCls = 'badge-refused';
-                        return `
-                            <tr>
-                                <td><strong>${l.employee_name}</strong> (${l.dayflow_emp_id})</td>
-                                <td>${l.type}</td>
-                                <td>${l.date_from} &rarr; ${l.date_to}</td>
-                                <td>${l.number_of_days} Days</td>
-                                <td><span class="badge ${badgeCls}">${l.state_label}</span></td>
-                                <td>${l.remarks}</td>
-                                <td><span style="color:var(--primary-light);font-size:0.8rem;">${l.manager_comment || '—'}</span></td>
                             </tr>
                         `;
                     }).join('');
                 }
             }
 
-            // Employee Directory Table (with Delete Employee option)
+            // Employee Directory Table (HR Tab)
             const empsTable = document.getElementById('employeesTable');
-            if (empsTable) {
+            if (empsTable && isAdm) {
                 empsTable.innerHTML = appState.all_employees.map(e => `
                     <tr>
                         <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
@@ -2203,25 +2218,24 @@ def index_page():
                         <td>${e.private_city}</td>
                         <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
                         <td>
-                            ${isAdm ? `
-                                <div style="display:flex;gap:0.4rem;align-items:center;">
-                                    <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
-                                        <i class="fa-solid fa-key"></i> Reset Pwd
+                            <div style="display:flex;gap:0.4rem;align-items:center;">
+                                <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
+                                    <i class="fa-solid fa-key"></i> Reset Pwd
+                                </button>
+                                ${e.id !== 1 ? `
+                                    <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteEmployee(${e.id}, '${e.name}')">
+                                        <i class="fa-solid fa-trash"></i> Delete
                                     </button>
-                                    ${e.id !== 1 ? `
-                                        <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteEmployee(${e.id}, '${e.name}')">
-                                            <i class="fa-solid fa-trash"></i> Delete
-                                        </button>
-                                    ` : ``}
-                                </div>
-                            ` : `<span style="font-size:0.75rem;color:var(--text-muted);">Active</span>`}
+                                ` : ``}
+                            </div>
                         </td>
                     </tr>
                 `).join('');
             }
 
+            // Salary Table (HR Tab)
             const salTable = document.getElementById('salaryTable');
-            if (salTable) {
+            if (salTable && isAdm) {
                 salTable.innerHTML = appState.salary_records.map(e => `
                     <tr>
                         <td><strong>${e.name}</strong></td>
@@ -2231,19 +2245,10 @@ def index_page():
                         <td>${e.bank_name}</td>
                         <td><span style="font-family:'JetBrains Mono'">${e.bank_account_no}</span></td>
                         <td>
-                            ${isAdm ? `<button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>` : `<span style="font-size:0.75rem;color:var(--text-muted);"><i class="fa-solid fa-lock"></i> Confidential</span>`}
+                            <button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
                         </td>
                     </tr>
                 `).join('');
-            }
-
-            if (emp) {
-                document.getElementById('profWorkPhone').value = emp.work_phone || '';
-                document.getElementById('profMobilePhone').value = emp.mobile_phone || '';
-                document.getElementById('profCity').value = emp.private_city || '';
-                document.getElementById('profEmergName').value = emp.emergency_contact_name || '';
-                document.getElementById('profEmergRel').value = emp.emergency_contact_relation || '';
-                document.getElementById('profEmergPhone').value = emp.emergency_contact_phone || '';
             }
         }
 
@@ -2260,8 +2265,8 @@ def index_page():
                     employee_id: empId,
                     salary_amount: newAmt,
                     salary_type: "Monthly Fixed",
-                    bank_name: "Silicon Valley Bank",
-                    bank_account_no: "US99 •••• 1234"
+                    bank_name: "State Bank of India",
+                    bank_account_no: "IN99 •••• 1234"
                 })
             });
             const data = await res.json();
@@ -2282,9 +2287,8 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
-    print(f"   * Master HR Administrator: {MASTER_EMAIL} (Password: {MASTER_PASS_PLAIN})")
-    print("   * Attendance Log Deletion (Individual & Clear All)")
-    print("   * Employee Profile Deletion from Directory")
-    print("   * Real-Time Attendance & Role-Based Access Controls")
+    print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
+    print("   * Employee RBAC: Restricted to Dashboard & My Profile only")
+    print("   * Self-Service Profile: Edit Name, Email, Phone, Address, Emergency Contact")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
