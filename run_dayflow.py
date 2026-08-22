@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Clean Database with Role-Based Access Controls
-Clean baseline: Single HR Master Admin account (alex.morgan@dayflow.demo / dayflow123)
-All previous test entries, test employees, demo leaves, and dummy attendance logs deleted.
+Dayflow HRMS - Master Administrator Setup
+Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
+Clean state: Ready to provision employees, track attendance, and manage organization workflows.
 """
 
 import os
@@ -23,18 +23,20 @@ app = FastAPI(title="Dayflow HRMS", description="Every workday, perfectly aligne
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-DEFAULT_PASS = hash_pw("dayflow123")
+MASTER_EMAIL = "sathiyamoorthy@dayflow.demo"
+MASTER_PASS_PLAIN = "sathiya"
+MASTER_PASS_HASH = hash_pw(MASTER_PASS_PLAIN)
 
 def get_initial_db():
     return {
         "users": {
-            "alex.morgan@dayflow.demo": {
+            MASTER_EMAIL: {
                 "id": 1,
-                "login": "alex.morgan@dayflow.demo",
-                "password_hash": DEFAULT_PASS,
-                "password_plain": "dayflow123",
-                "name": "Alex Morgan",
-                "email": "alex.morgan@dayflow.demo",
+                "login": MASTER_EMAIL,
+                "password_hash": MASTER_PASS_HASH,
+                "password_plain": MASTER_PASS_PLAIN,
+                "name": "Sathiya Moorthy",
+                "email": MASTER_EMAIL,
                 "role": "admin",
                 "role_label": "HR Director / Administrator",
                 "is_admin": True,
@@ -47,21 +49,21 @@ def get_initial_db():
             {
                 "id": 1,
                 "user_id": 1,
-                "name": "Alex Morgan",
+                "name": "Sathiya Moorthy",
                 "dayflow_emp_id": "DF-1001",
                 "job_title": "HR Director & Administrator",
                 "department": "Human Resources",
-                "work_email": "alex.morgan@dayflow.demo",
-                "work_phone": "+1 555-0101",
-                "mobile_phone": "+1 555-0102",
-                "private_city": "San Francisco",
-                "salary_amount": 8500.0,
+                "work_email": MASTER_EMAIL,
+                "work_phone": "+91 98765-43210",
+                "mobile_phone": "+91 98765-43211",
+                "private_city": "Headquarters",
+                "salary_amount": 9500.0,
                 "salary_type": "Monthly Fixed",
-                "bank_name": "First Republic Bank",
-                "bank_account_no": "US89 •••• 3000",
-                "emergency_contact_name": "Sarah Morgan",
-                "emergency_contact_relation": "Spouse",
-                "emergency_contact_phone": "+1 555-0109",
+                "bank_name": "State Bank of India",
+                "bank_account_no": "IN89 •••• 5001",
+                "emergency_contact_name": "Emergency Contact",
+                "emergency_contact_relation": "Family",
+                "emergency_contact_phone": "+91 98765-43299",
                 "attendance_state": "checked_out",
                 "last_check_in": None,
                 "worked_hours": 0.0
@@ -70,7 +72,7 @@ def get_initial_db():
         "leaves": [],
         "attendance_logs": [],
         "sessions": {
-            "session-alex-admin-token": "alex.morgan@dayflow.demo"
+            "session-master-hr-token": MASTER_EMAIL
         }
     }
 
@@ -128,12 +130,12 @@ class AdminSalaryUpdatePayload(BaseModel):
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization:
-        return DB["users"]["alex.morgan@dayflow.demo"]
+        return DB["users"][MASTER_EMAIL]
     token = authorization.replace("Bearer ", "").strip()
     if token not in DB["sessions"]:
         if token in DB["users"]:
             return DB["users"][token]
-        return DB["users"]["alex.morgan@dayflow.demo"]
+        return DB["users"][MASTER_EMAIL]
     email = DB["sessions"][token]
     user = DB["users"].get(email)
     if not user:
@@ -152,7 +154,7 @@ def get_demo_users():
             "role": u["role"],
             "role_label": u["role_label"],
             "is_admin": u.get("is_admin", False),
-            "password": u.get("password_plain", "dayflow123")
+            "password": u.get("password_plain", MASTER_PASS_PLAIN)
         }
         for u in DB["users"].values()
     ]
@@ -162,9 +164,9 @@ def login_user(payload: LoginPayload):
     email = payload.email.strip().lower()
     user = DB["users"].get(email)
     if not user:
-        raise HTTPException(status_code=401, detail=f"No account found with Email ID: '{email}'. Please check credentials or ask HR to create one.")
+        raise HTTPException(status_code=401, detail=f"No account found with Email ID: '{email}'.")
     if user["password_hash"] != hash_pw(payload.password):
-        raise HTTPException(status_code=401, detail="Invalid password. Please verify and try again.")
+        raise HTTPException(status_code=401, detail="Invalid password credentials.")
     
     token = f"sess-{uuid.uuid4().hex[:16]}"
     DB["sessions"][token] = email
@@ -294,7 +296,7 @@ def hr_reset_all_data(authorization: Optional[str] = Header(None)):
     
     DB = get_initial_db()
     EMP_SEQ = 1002
-    return {"success": True, "message": "All previous entries and test records have been deleted. Clean state restored!"}
+    return {"success": True, "message": "All previous entries and test records have been deleted. Clean state restored with HR Admin Sathiya Moorthy!"}
 
 @app.post("/api/auth/logout")
 def logout_user(authorization: Optional[str] = Header(None)):
@@ -323,7 +325,7 @@ def get_state(authorization: Optional[str] = Header(None)):
             u = DB["users"].get(e["work_email"])
             employees_list.append({
                 **e,
-                "login_password": u.get("password_plain", "dayflow123") if u else "dayflow123",
+                "login_password": u.get("password_plain", MASTER_PASS_PLAIN) if u else MASTER_PASS_PLAIN,
                 "created_at": u.get("created_at") if u else None
             })
     else:
@@ -368,7 +370,7 @@ def get_state(authorization: Optional[str] = Header(None)):
             "role": u["role"],
             "role_label": u["role_label"],
             "is_admin": u.get("is_admin", False),
-            "password": u.get("password_plain", "dayflow123")
+            "password": u.get("password_plain", MASTER_PASS_PLAIN)
         }
         for u in DB["users"].values()
     ]
@@ -781,18 +783,18 @@ def index_page():
                         <span>Human Resource Portal</span>
                     </div>
                 </div>
-                <p style="font-size:0.82rem;color:var(--text-muted);">Sign in with your employee email &amp; password</p>
+                <p style="font-size:0.82rem;color:var(--text-muted);">Sign in with your employee / HR email &amp; password</p>
             </div>
 
             <div class="auth-body">
                 <form id="loginForm" onsubmit="handleLogin(event)">
                     <div class="form-group">
                         <label>Employee / HR Email ID</label>
-                        <input type="email" id="loginEmail" class="form-control" placeholder="name@dayflow.demo" value="alex.morgan@dayflow.demo" required>
+                        <input type="email" id="loginEmail" class="form-control" placeholder="sathiyamoorthy@dayflow.demo" value="sathiyamoorthy@dayflow.demo" required>
                     </div>
                     <div class="form-group">
                         <label>Password</label>
-                        <input type="password" id="loginPassword" class="form-control" placeholder="••••••••" value="dayflow123" required>
+                        <input type="password" id="loginPassword" class="form-control" placeholder="sathiya" value="sathiya" required>
                     </div>
                     <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">
                         <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to HRMS
@@ -801,7 +803,7 @@ def index_page():
                     <!-- Quick Demo Accounts (Dynamically lists all users!) -->
                     <div class="demo-pills">
                         <div class="demo-pills-title">
-                            <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In Accounts</span>
+                            <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In</span>
                             <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">1 account</span>
                         </div>
                         <div class="pill-grid" id="quickUsersList">
@@ -886,7 +888,7 @@ def index_page():
 
                 <div class="btn btn-secondary" style="padding:0.4rem 0.8rem;font-size:0.85rem;border-radius:9999px;" onclick="openAuthModal()">
                     <i class="fa-solid fa-circle-user" style="color:var(--primary-light);"></i>
-                    <span id="headerUserName">Alex Morgan</span>
+                    <span id="headerUserName">Sathiya Moorthy</span>
                 </div>
             </div>
         </header>
@@ -896,7 +898,7 @@ def index_page():
             <!-- Hero Attendance Banner -->
             <div class="hero-card">
                 <div class="hero-left">
-                    <h3 id="greetingText">Good day, Alex Morgan!</h3>
+                    <h3 id="greetingText">Good day, Sathiya Moorthy!</h3>
                     <p id="heroSubText">Track attendance, manage workflows, and oversee organizational policies with RBAC precision.</p>
                 </div>
                 <div class="attendance-toggle-box">
@@ -1280,11 +1282,11 @@ def index_page():
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
                                 <div class="form-group">
                                     <label>Work Phone</label>
-                                    <input type="text" id="profWorkPhone" class="form-control" placeholder="+1 555-XXXX">
+                                    <input type="text" id="profWorkPhone" class="form-control" placeholder="+91 98765-XXXXX">
                                 </div>
                                 <div class="form-group">
                                     <label>Mobile Phone</label>
-                                    <input type="text" id="profMobilePhone" class="form-control" placeholder="+1 555-XXXX">
+                                    <input type="text" id="profMobilePhone" class="form-control" placeholder="+91 98765-XXXXX">
                                 </div>
                             </div>
                             <div class="form-group">
@@ -1304,7 +1306,7 @@ def index_page():
                             </div>
                             <div class="form-group">
                                 <label>Emergency Phone</label>
-                                <input type="text" id="profEmergPhone" class="form-control" placeholder="+1 555-XXXX">
+                                <input type="text" id="profEmergPhone" class="form-control" placeholder="+91 98765-XXXXX">
                             </div>
                             <button type="submit" class="btn btn-primary" style="margin-top:0.5rem;width:100%;">
                                 <i class="fa-solid fa-floppy-disk"></i> Save Profile Details
@@ -1491,7 +1493,7 @@ def index_page():
     <div id="toast"><i class="fa-solid fa-circle-check"></i> <span id="toastMsg">Action completed</span></div>
 
     <script>
-        let sessionToken = localStorage.getItem('dayflow_token') || 'session-alex-admin-token';
+        let sessionToken = localStorage.getItem('dayflow_token') || 'session-master-hr-token';
         let appState = null;
         let activeTab = 'dashboard';
         let lastCreatedCredentials = null;
@@ -1666,7 +1668,7 @@ def index_page():
         }
 
         async function handleResetAllData() {
-            if (!confirm("Are you sure you want to clear all test records and reset to clean database?")) return;
+            if (!confirm("Are you sure you want to clear all test records and reset database?")) return;
             const res = await fetch('/api/admin/reset_all_data', {
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${sessionToken}` }
@@ -1835,7 +1837,7 @@ def index_page():
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full organizational access and employee provisioning privileges.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Full organizational access and employee provisioning privileges.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('employeeMetricsGrid').style.display = 'none';
@@ -2139,9 +2141,8 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
-    print("   * Clean Fresh Database - Ready for New Employees")
-    print("   * Master HR Administrator: alex.morgan@dayflow.demo / dayflow123")
-    print("   * Create New Employee & Email ID with Password Generator")
-    print("   * Real-time Attendance Check-in & Time-off Management")
+    print(f"   * Master HR Administrator: {MASTER_EMAIL} (Password: {MASTER_PASS_PLAIN})")
+    print("   * Clean Employee Directory - Ready to Provision Employees")
+    print("   * Real-Time Attendance & Role-Based Access Controls")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
