@@ -354,6 +354,27 @@
                 </div>
             </div>
         </t>
+        <div class="dayflow-chat-widget">
+            <div t-if="state.chatOpen" class="dayflow-chat-panel shadow-lg">
+                <div class="dayflow-chat-header">
+                    <div><strong>Dayflow AI Assistant</strong><small>General HR help</small></div>
+                    <button class="btn btn-sm text-white" title="Close chat" t-on-click="() => state.chatOpen = false"><i class="fa fa-times"/></button>
+                </div>
+                <div class="dayflow-chat-messages">
+                    <div t-foreach="state.chatMessages" t-as="message" t-key="message_index" t-att-class="'dayflow-chat-message ' + message.role">
+                        <t t-esc="message.text"/>
+                    </div>
+                    <div t-if="state.chatLoading" class="dayflow-chat-message assistant">Thinking...</div>
+                </div>
+                <form class="dayflow-chat-input" t-on-submit.prevent="sendChatMessage">
+                    <input type="text" t-model="state.chatInput" placeholder="Ask an HR question..." maxlength="2000"/>
+                    <button class="btn btn-primary" type="submit" title="Send message" t-att-disabled="state.chatLoading"><i class="fa fa-paper-plane"/></button>
+                </form>
+            </div>
+            <button t-if="!state.chatOpen" class="dayflow-chat-toggle shadow" title="Open AI assistant" t-on-click="() => state.chatOpen = true">
+                <i class="fa fa-comments"/>
+            </button>
+        </div>
     </div>
 </t>
 

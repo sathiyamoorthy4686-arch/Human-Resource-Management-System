@@ -37,6 +37,8 @@ app = FastAPI(title="Dayflow HRMS", description="Every workday, perfectly aligne
 # Supabase Credentials Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://nodtjjmcwrgzxkuturgt.supabase.co").rstrip("/")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "sb_publishable_BalVHqs4SygkEyWfvz-Dpw_IE1VFCL2").rstrip(".")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dayflow_db.json")
 
@@ -212,29 +214,42 @@ class AdminSalaryUpdatePayload(BaseModel):
     bank_name: str
     bank_account_no: str
 
+class ChatMessage(BaseModel):
+    role: str  # "user" or "model"
+    text: str
+
+class GeminiChatPayload(BaseModel):
+    message: str
+    history: Optional[List[ChatMessage]] = []
+    context: Optional[Dict] = {}
+
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    """Resilient session resolution."""
+    """Strict session resolution — raises 401 if no valid session found."""
     if not authorization:
-        return DB["users"][MASTER_EMAIL]
+        raise HTTPException(status_code=401, detail="Not authenticated. Please log in.")
     token = authorization.replace("Bearer ", "").strip()
-    
+
+    # Empty or null token
+    if not token or token == "null" or token == "undefined":
+        raise HTTPException(status_code=401, detail="Session expired. Please log in again.")
+
+    # Look up session in sessions table
     if token in DB["sessions"]:
         email = DB["sessions"][token]
         if email in DB["users"]:
             return DB["users"][email]
-    
+
+    # Accept df-token:<email> format
     if token.startswith("df-token:"):
         email = token.split("df-token:", 1)[1]
         if email in DB["users"]:
             return DB["users"][email]
 
+    # Direct email as token (legacy)
     if token in DB["users"]:
         return DB["users"][token]
 
-    if token == "session-master-hr-token" or "master" in token.lower():
-        return DB["users"][MASTER_EMAIL]
-
-    return DB["users"][MASTER_EMAIL]
+    raise HTTPException(status_code=401, detail="Invalid or expired session. Please log in again.")
 
 # ================= PUBLIC & AUTH ENDPOINTS =================
 
@@ -515,6 +530,100 @@ def logout_user(authorization: Optional[str] = Header(None)):
             del DB["sessions"][token]
             save_database()
     return {"success": True, "message": "Logged out successfully."}
+
+@app.post("/api/gemini_chat")
+def gemini_chat(payload: GeminiChatPayload, authorization: Optional[str] = Header(None)):
+    user = get_current_user(authorization)
+    message = payload.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Please enter a message.")
+    if len(message) > 2000:
+        raise HTTPException(status_code=400, detail="Message is too long. Please keep it under 2000 characters.")
+    if not GEMINI_API_KEY:
+        raise HTTPException(status_code=503, detail="Gemini is not configured. Set GEMINI_API_KEY on the server.")
+
+    # --- Build rich context from live DB ---
+    is_admin = (user.get("email") == MASTER_EMAIL)
+    emp = next((e for e in DB["employees"] if e["id"] == user.get("employee_id") or e["work_email"] == user.get("email")), None)
+    ctx = payload.context or {}
+
+    if is_admin:
+        company_emps = [e for e in DB["employees"] if e["work_email"] != MASTER_EMAIL]
+        present = len([e for e in company_emps if e["attendance_state"] == "checked_in"])
+        pending_leaves = [l for l in DB["leaves"] if l["state"] == "confirm"]
+        context_block = (
+            f"ROLE: HR Director / Administrator\n"
+            f"USER: {user.get('name', 'Admin')} ({user.get('email')})\n"
+            f"TOTAL EMPLOYEES: {len(company_emps)}\n"
+            f"PRESENT TODAY: {present}\n"
+            f"ABSENT TODAY: {max(0, len(company_emps) - present)}\n"
+            f"PENDING LEAVE APPROVALS: {len(pending_leaves)}\n"
+            f"TODAY: {datetime.now().strftime('%A, %B %d, %Y %H:%M')}\n"
+        )
+        role_instructions = (
+            "You are Dayflow HR Assistant for an HR Administrator. "
+            "You can provide org-wide metrics, answer HR policy questions, summarize pending leave requests, "
+            "explain attendance patterns, and advise on employee management best practices. "
+            "You have access to real-time org data above. Be analytical, concise, and professional. "
+            "For irreversible actions (deleting employees, changing salaries) instruct the admin to use the dashboard UI."
+        )
+    else:
+        my_leaves = [l for l in DB["leaves"] if l.get("employee_id") == (emp["id"] if emp else -1)]
+        pto_taken = sum(l["number_of_days"] for l in my_leaves if l["state"] == "validate" and "PTO" in l.get("type", ""))
+        sick_taken = sum(l["number_of_days"] for l in my_leaves if l["state"] == "validate" and "Sick" in l.get("type", ""))
+        pending_my = [l for l in my_leaves if l["state"] == "confirm"]
+        context_block = (
+            f"ROLE: Employee (Self-Service)\n"
+            f"USER: {user.get('name', 'Employee')} ({user.get('email')})\n"
+            f"EMPLOYEE ID: {emp.get('dayflow_emp_id', 'N/A') if emp else 'N/A'}\n"
+            f"DEPARTMENT: {emp.get('department', 'N/A') if emp else 'N/A'}\n"
+            f"JOB TITLE: {emp.get('job_title', 'N/A') if emp else 'N/A'}\n"
+            f"ATTENDANCE STATUS: {emp.get('attendance_state', 'checked_out').replace('_', ' ').title() if emp else 'Unknown'}\n"
+            f"PTO BALANCE: {max(0, 20 - int(pto_taken))} days remaining (out of 20)\n"
+            f"SICK LEAVE BALANCE: {max(0, 12 - int(sick_taken))} days remaining (out of 12)\n"
+            f"MY PENDING LEAVE REQUESTS: {len(pending_my)}\n"
+            f"TODAY: {datetime.now().strftime('%A, %B %d, %Y %H:%M')}\n"
+        )
+        role_instructions = (
+            "You are Dayflow HR Assistant for an employee. "
+            "Help them understand their leave balances, attendance records, HR policies (leave types, approval workflow), "
+            "and how to use the HRMS. You have access to their live profile data above — use it to give personalized answers. "
+            "Be friendly, empathetic, and clear. Do not reveal other employees' data. "
+            "For leave submissions or profile changes, guide them to use the dashboard UI."
+        )
+
+    system_prompt = (
+        f"{role_instructions}\n\n"
+        f"=== LIVE HR CONTEXT ===\n{context_block}\n"
+        "=== GUIDELINES ===\n"
+        "- Answer in markdown-friendly plain text (no code blocks unless showing formulas).\n"
+        "- Be concise: 2-4 sentences unless a detailed explanation is needed.\n"
+        "- If unsure about specific data not provided, say so honestly.\n"
+        "- Never fabricate employee names, IDs, or salary figures.\n"
+    )
+
+    # Build multi-turn conversation for Gemini
+    contents = [{"role": "user", "parts": [{"text": system_prompt + "\n\nPlease acknowledge you understand your role and are ready to help."}]},
+                {"role": "model", "parts": [{"text": f"Understood! I'm Dayflow HR Assistant, ready to help {user.get('name', 'you')} with HR queries. How can I assist?"}]}]
+
+    for h in (payload.history or []):
+        contents.append({"role": h.role, "parts": [{"text": h.text}]})
+
+    contents.append({"role": "user", "parts": [{"text": message}]})
+
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            params={"key": GEMINI_API_KEY},
+            json={"contents": contents, "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024}},
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        answer = data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+        return {"answer": answer or "I couldn't generate a response. Please try again."}
+    except requests.RequestException as e:
+        raise HTTPException(status_code=503, detail="The AI assistant is temporarily unavailable. Please try again.")
 
 # ================= STATE & ROLE-BASED DASHBOARD PAYLOAD =================
 
@@ -969,6 +1078,20 @@ def index_page():
         .modal-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; width: 90%; max-width: 580px; box-shadow: var(--shadow-lg); overflow: hidden; }
         .modal-header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
         .modal-body { padding: 1.5rem; max-height: 75vh; overflow-y: auto; }
+        .chat-widget { position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 1050; }
+        .chat-toggle { width: 3.5rem; height: 3.5rem; border: 0; border-radius: 50%; background: var(--accent); color: white; font-size: 1.3rem; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+        .chat-panel { display: none; width: min(360px, calc(100vw - 2rem)); background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; box-shadow: var(--shadow-lg); }
+        .chat-panel.open { display: block; }
+        .chat-header { display: flex; justify-content: space-between; align-items: center; padding: .85rem 1rem; background: var(--primary-dark); color: white; }
+        .chat-header small { display: block; color: var(--text-muted); font-size: .72rem; }
+        .chat-header button { background: none; color: white; border: 0; cursor: pointer; }
+        .chat-messages { display: flex; flex-direction: column; gap: .6rem; max-height: 300px; overflow-y: auto; padding: 1rem; }
+        .chat-message { max-width: 85%; padding: .6rem .75rem; border-radius: 10px; white-space: pre-wrap; font-size: .84rem; }
+        .chat-message.assistant { align-self: flex-start; background: #26364e; color: var(--text-main); }
+        .chat-message.user { align-self: flex-end; background: var(--primary); color: white; }
+        .chat-input { display: flex; gap: .5rem; padding: .75rem; border-top: 1px solid var(--border); }
+        .chat-input input { min-width: 0; flex: 1; background: #0f172a; color: white; border: 1px solid var(--border); border-radius: 7px; padding: .55rem; }
+        .chat-input button { border: 0; border-radius: 7px; background: var(--accent); color: white; width: 2.4rem; cursor: pointer; }
         .modal-footer { padding: 1rem 1.5rem; background: rgba(0, 0, 0, 0.2); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.75rem; }
 
         #toast { position: fixed; bottom: 2rem; right: 2rem; padding: 0.9rem 1.4rem; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--primary); box-shadow: var(--shadow-lg); color: white; font-weight: 600; font-size: 0.9rem; display: none; align-items: center; gap: 0.6rem; z-index: 20000; }
@@ -1696,12 +1819,54 @@ def index_page():
 
     <!-- Toast Notification -->
     <div id="toast"><i class="fa-solid fa-circle-check"></i> <span id="toastMsg">Action completed</span></div>
+    <div id="chatWidget" class="chat-widget" style="display:none;">
+        <button id="chatToggle" class="chat-toggle" onclick="toggleChat()" title="Open AI assistant"><i class="fa-solid fa-comments"></i></button>
+        <div id="chatPanel" class="chat-panel">
+            <div class="chat-header"><div><strong>Dayflow AI Assistant</strong><small>General HR help</small></div><button onclick="toggleChat()" title="Close chat"><i class="fa-solid fa-xmark"></i></button></div>
+            <div id="chatMessages" class="chat-messages"><div class="chat-message assistant">Hi! Ask me a general HR question.</div></div>
+            <form class="chat-input" onsubmit="sendChatMessage(event)"><input id="chatInput" maxlength="2000" placeholder="Ask an HR question..." required><button type="submit" title="Send message"><i class="fa-solid fa-paper-plane"></i></button></form>
+        </div>
+    </div>
 
     <script>
-        let sessionToken = localStorage.getItem('dayflow_token') || 'df-token:sathiyamoorthy@dayflow.demo';
+        let sessionToken = localStorage.getItem('dayflow_token') || null;
         let appState = null;
         let activeTab = 'dashboard';
         let lastCreatedCredentials = null;
+
+        function toggleChat() {
+            const panel = document.getElementById('chatPanel');
+            panel.classList.toggle('open');
+            document.getElementById('chatToggle').style.display = panel.classList.contains('open') ? 'none' : 'flex';
+        }
+
+        async function sendChatMessage(event) {
+            event.preventDefault();
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+            const messages = document.getElementById('chatMessages');
+            messages.insertAdjacentHTML('beforeend', '<div class="chat-message user"></div>');
+            messages.lastElementChild.innerText = message;
+            input.value = '';
+            input.disabled = true;
+            try {
+                const res = await fetch('/api/gemini_chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                    body: JSON.stringify({ message })
+                });
+                const data = await res.json();
+                messages.insertAdjacentHTML('beforeend', '<div class="chat-message assistant"></div>');
+                messages.lastElementChild.innerText = data.answer || data.detail || 'I could not answer that right now.';
+            } catch (error) {
+                messages.insertAdjacentHTML('beforeend', '<div class="chat-message assistant">The AI assistant is temporarily unavailable.</div>');
+            } finally {
+                input.disabled = false;
+                input.focus();
+                messages.scrollTop = messages.scrollHeight;
+            }
+        }
 
         function showToast(msg) {
             const toast = document.getElementById('toast');
@@ -1942,7 +2107,8 @@ def index_page():
                 });
             }
             localStorage.removeItem('dayflow_token');
-            sessionToken = 'df-token:sathiyamoorthy@dayflow.demo';
+            sessionToken = null;
+            appState = null;
             showToast('Logged out successfully.');
             openAuthModal();
         }
@@ -1950,12 +2116,15 @@ def index_page():
         async function fetchState() {
             try {
                 if (!sessionToken) {
-                    sessionToken = 'df-token:sathiyamoorthy@dayflow.demo';
+                    openAuthModal();
+                    return;
                 }
                 const res = await fetch('/api/state', {
                     headers: { 'Authorization': `Bearer ${sessionToken}` }
                 });
                 if (res.status === 401) {
+                    localStorage.removeItem('dayflow_token');
+                    sessionToken = null;
                     openAuthModal();
                     return;
                 }
@@ -1972,7 +2141,8 @@ def index_page():
                 method: 'POST',
                 headers: { 'Authorization': `Bearer ${sessionToken}` }
             });
-            const data = await res.json();
+                const data = await res.json();
+                document.getElementById('chatWidget').style.display = 'block';
             showToast(data.message);
             await fetchState();
         }
@@ -2390,7 +2560,329 @@ def index_page():
         }
 
         fetchState();
+
+        // ============================================================
+        //  DAYFLOW AI CHAT WIDGET
+        // ============================================================
+        let chatHistory = [];
+        let chatOpen = false;
+        let chatThinking = false;
+
+        function toggleChat() {
+            chatOpen = !chatOpen;
+            const panel = document.getElementById('dfChatPanel');
+            const fab = document.getElementById('dfChatFab');
+            if (chatOpen) {
+                panel.classList.add('df-chat-open');
+                fab.classList.add('df-fab-active');
+                document.getElementById('dfChatInput').focus();
+                if (chatHistory.length === 0) renderWelcome();
+            } else {
+                panel.classList.remove('df-chat-open');
+                fab.classList.remove('df-fab-active');
+            }
+        }
+
+        function renderWelcome() {
+            const isAdmin = appState && appState.is_admin;
+            const name = appState && appState.current_user ? appState.current_user.name.split(' ')[0] : 'there';
+            const chips = isAdmin
+                ? ["📊 Show today's attendance", "📋 Pending leave requests", "💡 HR best practices", "🔍 Attendance rate"]
+                : ["📅 My leave balance", "🏥 How to request sick leave", "⏰ My attendance today", "ℹ️ Leave policy"];
+            const msgs = document.getElementById('dfChatMessages');
+            msgs.innerHTML = `
+                <div class="df-chat-welcome">
+                    <div class="df-chat-avatar df-avatar-ai">🤖</div>
+                    <div class="df-chat-bubble df-bubble-ai">
+                        <strong>Hi ${name}! 👋</strong><br>
+                        I'm your Dayflow HR Assistant powered by Gemini AI. I have live access to your HR data and can help with leave, attendance, policies, and more.
+                    </div>
+                </div>
+                <div class="df-chat-chips" id="dfSuggestionChips">
+                    ${chips.map(c => `<button class="df-chip" onclick="sendChatMessage('${c.replace(/'/g, "\\'")}')">` + c + `</button>`).join('')}
+                </div>
+            `;
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function appendMessage(role, text, animate = false) {
+            const msgs = document.getElementById('dfChatMessages');
+            const chips = document.getElementById('dfSuggestionChips');
+            if (chips) chips.remove();
+
+            const div = document.createElement('div');
+            div.className = 'df-chat-welcome';
+            const isAI = role === 'model';
+
+            // Simple markdown-ish: bold, line breaks
+            const formatted = text
+                .replace(/[*][*](.+?)[*][*]/g, '<strong>$1</strong>')
+                .replace(/[*](.+?)[*]/g, '<em>$1</em>')
+                .replace(/[\\n]/g, '<br>');
+
+            div.innerHTML = `
+                <div class="df-chat-avatar ${isAI ? 'df-avatar-ai' : 'df-avatar-user'}">${isAI ? '🤖' : (appState && appState.current_user ? appState.current_user.name[0].toUpperCase() : 'U')}</div>
+                <div class="df-chat-bubble ${isAI ? 'df-bubble-ai' : 'df-bubble-user'}">${isAI ? formatted : text}</div>
+            `;
+            if (animate) div.style.animation = 'dfMsgIn 0.25s ease';
+            msgs.appendChild(div);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function showTypingIndicator() {
+            const msgs = document.getElementById('dfChatMessages');
+            const div = document.createElement('div');
+            div.className = 'df-chat-welcome'; div.id = 'dfTypingIndicator';
+            div.innerHTML = `
+                <div class="df-chat-avatar df-avatar-ai">🤖</div>
+                <div class="df-chat-bubble df-bubble-ai df-typing">
+                    <span></span><span></span><span></span>
+                </div>`;
+            msgs.appendChild(div);
+            msgs.scrollTop = msgs.scrollHeight;
+        }
+
+        function hideTypingIndicator() {
+            const el = document.getElementById('dfTypingIndicator');
+            if (el) el.remove();
+        }
+
+        async function sendChatMessage(text) {
+            if (chatThinking) return;
+            const input = document.getElementById('dfChatInput');
+            const msg = (text || input.value).trim();
+            if (!msg) return;
+            input.value = '';
+            input.disabled = true;
+            chatThinking = true;
+            document.getElementById('dfSendBtn').disabled = true;
+
+            appendMessage('user', msg, true);
+            chatHistory.push({ role: 'user', text: msg });
+            showTypingIndicator();
+
+            // Build context snippet from live state
+            const ctx = appState ? {
+                is_admin: appState.is_admin,
+                metrics: appState.metrics,
+                emp_metrics: appState.emp_metrics
+            } : {};
+
+            try {
+                const res = await fetch('/api/gemini_chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
+                    body: JSON.stringify({ message: msg, history: chatHistory.slice(-12), context: ctx })
+                });
+                const data = await res.json();
+                hideTypingIndicator();
+                const reply = res.ok ? data.answer : (data.detail || 'Something went wrong. Please try again.');
+                appendMessage('model', reply, true);
+                chatHistory.push({ role: 'model', text: reply });
+            } catch (err) {
+                hideTypingIndicator();
+                appendMessage('model', '⚠️ Network error. Please check your connection and try again.', true);
+            }
+
+            input.disabled = false;
+            chatThinking = false;
+            document.getElementById('dfSendBtn').disabled = false;
+            input.focus();
+        }
+
+        function onChatKeydown(e) {
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChatMessage(); }
+        }
+
+        function clearChat() {
+            chatHistory = [];
+            document.getElementById('dfChatMessages').innerHTML = '';
+            renderWelcome();
+        }
     </script>
+
+    <!-- ============ DAYFLOW AI CHAT WIDGET HTML ============ -->
+    <style>
+        /* FAB Button */
+        #dfChatFab {
+            position: fixed; bottom: 1.75rem; right: 1.75rem; z-index: 9000;
+            width: 60px; height: 60px; border-radius: 50%;
+            background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%);
+            border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 1.6rem; box-shadow: 0 8px 32px rgba(99,102,241,0.5);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            color: white;
+        }
+        #dfChatFab:hover { transform: scale(1.1); box-shadow: 0 12px 40px rgba(99,102,241,0.65); }
+        #dfChatFab.df-fab-active { transform: rotate(45deg) scale(1.05); background: linear-gradient(135deg, #ef4444, #dc2626); }
+        #dfChatFab .df-fab-icon-open { display: block; }
+        #dfChatFab .df-fab-icon-close { display: none; }
+        #dfChatFab.df-fab-active .df-fab-icon-open { display: none; }
+        #dfChatFab.df-fab-active .df-fab-icon-close { display: block; }
+
+        /* Chat Panel */
+        #dfChatPanel {
+            position: fixed; bottom: 5.5rem; right: 1.75rem; z-index: 8999;
+            width: 380px; height: 540px; max-height: 80vh;
+            background: #0f172a;
+            border: 1px solid rgba(99,102,241,0.35);
+            border-radius: 20px;
+            box-shadow: 0 24px 64px rgba(0,0,0,0.6), 0 0 40px rgba(99,102,241,0.2);
+            display: flex; flex-direction: column;
+            opacity: 0; pointer-events: none; transform: translateY(20px) scale(0.95);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            overflow: hidden;
+        }
+        #dfChatPanel.df-chat-open {
+            opacity: 1; pointer-events: all; transform: translateY(0) scale(1);
+        }
+
+        /* Header */
+        .df-chat-header {
+            background: linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%);
+            border-bottom: 1px solid rgba(99,102,241,0.25);
+            padding: 1rem 1.1rem;
+            display: flex; align-items: center; gap: 0.75rem;
+            flex-shrink: 0;
+        }
+        .df-chat-header-icon {
+            width: 38px; height: 38px; border-radius: 12px;
+            background: linear-gradient(135deg, #6366f1, #4338ca);
+            display: flex; align-items: center; justify-content: center;
+            font-size: 1.2rem; flex-shrink: 0;
+            box-shadow: 0 0 16px rgba(99,102,241,0.4);
+        }
+        .df-chat-header-info { flex: 1; min-width: 0; }
+        .df-chat-header-info h3 { font-size: 0.92rem; font-weight: 700; color: #f8fafc; margin: 0; }
+        .df-chat-header-info span { font-size: 0.72rem; color: #10b981; display: flex; align-items: center; gap: 0.3rem; }
+        .df-chat-header-info span::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #10b981; animation: dfPulse 2s infinite; }
+        .df-chat-header-actions { display: flex; gap: 0.4rem; }
+        .df-chat-header-actions button {
+            width: 30px; height: 30px; border-radius: 8px; border: none;
+            background: rgba(255,255,255,0.07); color: #94a3b8;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            font-size: 0.85rem; transition: all 0.2s;
+        }
+        .df-chat-header-actions button:hover { background: rgba(255,255,255,0.13); color: #f8fafc; }
+
+        /* Messages */
+        #dfChatMessages {
+            flex: 1; overflow-y: auto; padding: 1rem;
+            display: flex; flex-direction: column; gap: 0.75rem;
+            scrollbar-width: thin; scrollbar-color: #334155 transparent;
+        }
+        #dfChatMessages::-webkit-scrollbar { width: 4px; }
+        #dfChatMessages::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+
+        .df-chat-welcome { display: flex; gap: 0.6rem; align-items: flex-end; }
+        .df-chat-avatar {
+            width: 30px; height: 30px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 0.9rem; flex-shrink: 0;
+        }
+        .df-avatar-ai { background: linear-gradient(135deg, #6366f1, #4338ca); }
+        .df-avatar-user { background: linear-gradient(135deg, #06b6d4, #0891b2); color: white; font-weight: 700; font-size: 0.8rem; }
+        .df-chat-bubble {
+            max-width: 85%; padding: 0.65rem 0.9rem;
+            border-radius: 16px; font-size: 0.84rem; line-height: 1.55;
+            word-break: break-word;
+        }
+        .df-bubble-ai {
+            background: #1e293b; color: #e2e8f0;
+            border: 1px solid rgba(99,102,241,0.15);
+            border-bottom-left-radius: 4px;
+        }
+        .df-bubble-user {
+            background: linear-gradient(135deg, #6366f1, #4338ca);
+            color: white; margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+        .df-chat-welcome:has(.df-bubble-user) { flex-direction: row-reverse; }
+
+        /* Typing dots */
+        .df-typing { display: flex; gap: 5px; align-items: center; min-width: 48px; padding: 0.75rem 1rem !important; }
+        .df-typing span {
+            display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+            background: #6366f1; animation: dfBounce 1.2s infinite;
+        }
+        .df-typing span:nth-child(2) { animation-delay: 0.2s; }
+        .df-typing span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes dfBounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
+        @keyframes dfPulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+        @keyframes dfMsgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Suggestion chips */
+        .df-chat-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; padding: 0.25rem 0; }
+        .df-chip {
+            padding: 0.35rem 0.75rem; border-radius: 999px;
+            background: rgba(99,102,241,0.12); border: 1px solid rgba(99,102,241,0.3);
+            color: #818cf8; font-size: 0.76rem; font-weight: 600;
+            cursor: pointer; transition: all 0.2s; white-space: nowrap;
+            font-family: 'Plus Jakarta Sans', sans-serif;
+        }
+        .df-chip:hover { background: rgba(99,102,241,0.25); color: #c7d2fe; transform: translateY(-1px); }
+
+        /* Input area */
+        .df-chat-footer {
+            padding: 0.85rem; border-top: 1px solid rgba(99,102,241,0.15);
+            background: rgba(15,23,42,0.8); flex-shrink: 0;
+        }
+        .df-chat-inputrow {
+            display: flex; gap: 0.5rem; align-items: flex-end;
+            background: #1e293b; border: 1px solid rgba(99,102,241,0.25);
+            border-radius: 14px; padding: 0.5rem 0.5rem 0.5rem 0.85rem;
+            transition: border-color 0.2s;
+        }
+        .df-chat-inputrow:focus-within { border-color: rgba(99,102,241,0.6); box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
+        #dfChatInput {
+            flex: 1; background: none; border: none; outline: none;
+            color: #f8fafc; font-size: 0.85rem; resize: none;
+            font-family: 'Plus Jakarta Sans', sans-serif; line-height: 1.5;
+            max-height: 100px; overflow-y: auto;
+        }
+        #dfChatInput::placeholder { color: #475569; }
+        #dfSendBtn {
+            width: 36px; height: 36px; border-radius: 10px; border: none;
+            background: linear-gradient(135deg, #6366f1, #4338ca);
+            color: white; cursor: pointer; display: flex; align-items: center;
+            justify-content: center; font-size: 0.95rem; flex-shrink: 0;
+            transition: all 0.2s; box-shadow: 0 4px 12px rgba(99,102,241,0.3);
+        }
+        #dfSendBtn:hover:not(:disabled) { transform: scale(1.08); box-shadow: 0 6px 18px rgba(99,102,241,0.5); }
+        #dfSendBtn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        .df-chat-footer-hint { font-size: 0.68rem; color: #475569; text-align: center; margin-top: 0.4rem; }
+    </style>
+
+    <!-- FAB Button -->
+    <button id="dfChatFab" onclick="toggleChat()" title="Dayflow AI Assistant">
+        <i class="fa-solid fa-robot df-fab-icon-open"></i>
+        <i class="fa-solid fa-xmark df-fab-icon-close"></i>
+    </button>
+
+    <!-- Chat Panel -->
+    <div id="dfChatPanel">
+        <div class="df-chat-header">
+            <div class="df-chat-header-icon">🤖</div>
+            <div class="df-chat-header-info">
+                <h3>Dayflow AI Assistant</h3>
+                <span>Powered by Gemini · Live HR data</span>
+            </div>
+            <div class="df-chat-header-actions">
+                <button onclick="clearChat()" title="Clear chat"><i class="fa-solid fa-rotate-left"></i></button>
+                <button onclick="toggleChat()" title="Close"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+        </div>
+        <div id="dfChatMessages"></div>
+        <div class="df-chat-footer">
+            <div class="df-chat-inputrow">
+                <textarea id="dfChatInput" rows="1" placeholder="Ask about leave, attendance, HR policies…" onkeydown="onChatKeydown(event)" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px'"></textarea>
+                <button id="dfSendBtn" onclick="sendChatMessage()" title="Send">
+                    <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </div>
+            <p class="df-chat-footer-hint">Press Enter to send · Shift+Enter for new line</p>
+        </div>
+    </div>
 </body>
 </html>
     """

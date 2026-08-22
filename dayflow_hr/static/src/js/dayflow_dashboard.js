@@ -32,6 +32,10 @@ export class DayflowDashboard extends Component {
                 employees: [],
             },
             activities: [],
+            chatOpen: false,
+            chatInput: "",
+            chatLoading: false,
+            chatMessages: [{ role: "assistant", text: "Hi! Ask me a general HR question." }],
             liveTime: "",
             liveDate: "",
         });
@@ -87,6 +91,27 @@ export class DayflowDashboard extends Component {
             await this.loadDashboardData();
         } catch (err) {
             this.notification.add("Could not update attendance status.", { type: "danger" });
+        }
+    }
+
+    async sendChatMessage() {
+        const message = this.state.chatInput.trim();
+        if (!message || this.state.chatLoading) {
+            return;
+        }
+        this.state.chatInput = "";
+        this.state.chatMessages.push({ role: "user", text: message });
+        this.state.chatLoading = true;
+        try {
+            const result = await this.rpc("/dayflow/gemini_chat", { message });
+            this.state.chatMessages.push({
+                role: "assistant",
+                text: result.answer || result.error || "I could not answer that right now.",
+            });
+        } catch (err) {
+            this.state.chatMessages.push({ role: "assistant", text: "The AI assistant is temporarily unavailable." });
+        } finally {
+            this.state.chatLoading = false;
         }
     }
 

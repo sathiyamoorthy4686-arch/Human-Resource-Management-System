@@ -65,6 +65,17 @@ Update or start Odoo:
 python odoo-bin -c odoo.conf -d dayflow_db -u dayflow_hr --demo
 ```
 
+### Gemini AI Assistant
+The dashboard includes a floating HR chat box in both the standalone app and Odoo module. Configure the API key on the server before starting the app; never put it in JavaScript or commit it to Git.
+
+PowerShell:
+```powershell
+$env:GEMINI_API_KEY="your-new-gemini-key"
+python run_dayflow.py
+```
+
+The assistant is limited to general HR guidance and does not approve leave, make payroll decisions, or expose confidential employee information.
+
 ---
 
 ## 📂 Repository Structure

@@ -1,13 +1,48 @@
 ﻿# -*- coding: utf-8 -*-
 import logging
+import os
 from datetime import date, datetime, timedelta
+import requests
 from odoo import http, fields, _
 from odoo.http import request
 from odoo.addons.auth_signup.controllers.main import AuthSignupHome
 
 _logger = logging.getLogger(__name__)
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '').strip()
+GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-2.0-flash')
 
 class DayflowController(http.Controller):
+
+    @http.route('/dayflow/gemini_chat', type='json', auth='user')
+    def gemini_chat(self, message):
+        message = (message or '').strip()
+        if not message:
+            return {'error': _('Please enter a message.')}
+        if len(message) > 2000:
+            return {'error': _('Message is too long. Please keep it under 2000 characters.')}
+        if not GEMINI_API_KEY:
+            return {'error': _('Gemini is not configured. Set GEMINI_API_KEY on the Odoo server.')}
+
+        prompt = (
+            'You are Dayflow HR Assistant. Answer general HRMS questions clearly and briefly. '
+            'Do not make approval, rejection, payroll, or employment decisions. '
+            'Tell the user to contact HR for account-specific or confidential matters. '
+            'User question: %s' % message
+        )
+        try:
+            response = requests.post(
+                'https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent' % GEMINI_MODEL,
+                params={'key': GEMINI_API_KEY},
+                json={'contents': [{'parts': [{'text': prompt}]}]},
+                timeout=20,
+            )
+            response.raise_for_status()
+            data = response.json()
+            answer = data.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '').strip()
+            return {'answer': answer or _('Gemini returned an empty response.')}
+        except requests.RequestException:
+            _logger.exception('Gemini request failed')
+            return {'error': _('The AI assistant is temporarily unavailable.')}
 
     @http.route('/dayflow/dashboard_data', type='json', auth='user')
     def get_dashboard_data(self):
