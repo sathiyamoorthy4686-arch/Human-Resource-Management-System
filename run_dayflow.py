@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Master Administrator & Role-Based Navigation
+Dayflow HRMS - Master Administrator & Role-Based Attendance Scope
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
 
-RBAC Rules:
-- HR Administrator (Sathiya Moorthy): Full access to Dashboard, Attendance, Leaves, Employees, Compensation, Profile
+Rules:
+- HR Administrator (Sathiya Moorthy):
+  * Executive management role (not tracked as an employee in attendance monitoring)
+  * Sees all organization monitoring tabs (Attendance, Leaves, Directory, Compensation)
 - Employee (e.g. sathya):
-  * Strictly Restricted: ONLY Dashboard & My Profile
-  * Official Email ID is permanent and locked (Read-Only)
-  * Self-service editing of: Full Name, Phone Numbers, Residential Address/City, Emergency Contacts
+  * Self-service portal: Dashboard (Check-In / Check-Out) & My Profile (Name, Phone, Address, Emergency Contact)
+  * Official email is locked and permanent
 """
 
 import os
@@ -381,14 +382,18 @@ def get_state(authorization: Optional[str] = Header(None)):
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     is_admin = user.get("is_admin", False) or user.get("is_officer", False)
 
+    # Actual monitored company employees (excludes Master HR Admin from employee monitoring roster)
+    company_staff_emps = [e for e in DB["employees"] if e["work_email"] != MASTER_EMAIL and e["id"] != 1]
+
     if is_admin:
-        attendance_logs = DB["attendance_logs"]
-        all_leaves = DB["leaves"]
-        pending_leaves = [l for l in DB["leaves"] if l["state"] == "confirm"]
-        salary_records = DB["employees"]
+        # Attendance logs for company staff (excludes HR Admin)
+        attendance_logs = [a for a in DB["attendance_logs"] if a.get("dayflow_emp_id") != "DF-1001" and a.get("employee_id") != 1]
+        all_leaves = [l for l in DB["leaves"] if l.get("dayflow_emp_id") != "DF-1001" and l.get("employee_id") != 1]
+        pending_leaves = [l for l in all_leaves if l["state"] == "confirm"]
+        salary_records = company_staff_emps
         
         employees_list = []
-        for e in DB["employees"]:
+        for e in company_staff_emps:
             u = DB["users"].get(e["work_email"])
             employees_list.append({
                 **e,
@@ -412,12 +417,13 @@ def get_state(authorization: Optional[str] = Header(None)):
                 "private_city": e["private_city"],
                 "attendance_state": e["attendance_state"]
             }
-            for e in DB["employees"]
+            for e in company_staff_emps
         ]
 
-    total_emps = len(DB["employees"])
-    present_emps = len([e for e in DB["employees"] if e["attendance_state"] == "checked_in"])
-    on_leave = len([l for l in DB["leaves"] if l["state"] == "validate" and l["number_of_days"] > 0 and "Sick" in l["type"]])
+    # Metrics calculate strictly on company staff
+    total_emps = len(company_staff_emps)
+    present_emps = len([e for e in company_staff_emps if e["attendance_state"] == "checked_in"])
+    on_leave = len([l for l in DB["leaves"] if l["state"] == "validate" and l["number_of_days"] > 0 and "Sick" in l["type"] and l.get("employee_id") != 1])
     absent_emps = max(0, total_emps - present_emps - on_leave)
 
     emp_leaves_taken = sum(l["number_of_days"] for l in all_leaves if l["state"] == "validate" and "PTO" in l["type"])
@@ -974,13 +980,14 @@ def index_page():
 
         <div class="content">
 
-            <!-- Hero Attendance Banner (Check In / Check Out) -->
+            <!-- Hero Attendance Banner (Shows Punch Box for Employees; Management Info for HR) -->
             <div class="hero-card">
                 <div class="hero-left">
                     <h3 id="greetingText">Good day, Sathiya Moorthy!</h3>
-                    <p id="heroSubText">Track attendance and manage your workday seamlessly.</p>
+                    <p id="heroSubText">Track attendance and manage organization workflows seamlessly.</p>
                 </div>
-                <div class="attendance-toggle-box">
+                <!-- Employee Check-In Box -->
+                <div class="attendance-toggle-box" id="heroAttendancePunchBox">
                     <div class="time-display">
                         <span class="label">Worked Today</span>
                         <span class="value" id="workedTimer">0.0 hrs</span>
@@ -989,6 +996,11 @@ def index_page():
                         <i class="fa-solid fa-fingerprint"></i>
                         <span id="attendanceBtnLabel">Check In</span>
                     </button>
+                </div>
+                <!-- HR Executive Management Badge -->
+                <div id="hrExecutiveHeroBadge" style="display:none;background:rgba(99,102,241,0.15);border:1px solid rgba(99,102,241,0.4);border-radius:12px;padding:0.9rem 1.25rem;text-align:right;">
+                    <div style="font-size:0.75rem;color:var(--primary-light);text-transform:uppercase;font-weight:700;letter-spacing:0.05em;"><i class="fa-solid fa-crown" style="color:var(--warning);"></i> Administrator</div>
+                    <div style="font-size:0.95rem;color:white;font-weight:700;">Full System Management</div>
                 </div>
             </div>
 
@@ -999,15 +1011,15 @@ def index_page():
                     <span id="rbacNoticeText">RBAC Active: HR Director / Administrator.</span>
                 </div>
 
-                <!-- HR ADMIN METRICS GRID -->
+                <!-- HR ADMIN METRICS GRID (Shows stats on Company Employees) -->
                 <div class="metrics-grid" id="adminMetricsGrid">
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-title">Total Employees</span>
+                            <span class="metric-title">Staff Employees</span>
                             <div class="metric-icon icon-blue"><i class="fa-solid fa-users"></i></div>
                         </div>
-                        <div class="metric-value" id="mTotalEmps">1</div>
-                        <div class="metric-sub">Organization wide</div>
+                        <div class="metric-value" id="mTotalEmps">0</div>
+                        <div class="metric-sub">Provisioned staff members</div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
@@ -1030,7 +1042,7 @@ def index_page():
                             <span class="metric-title">Absent / Pending</span>
                             <div class="metric-icon icon-red"><i class="fa-solid fa-user-xmark"></i></div>
                         </div>
-                        <div class="metric-value" id="mAbsent">1</div>
+                        <div class="metric-value" id="mAbsent">0</div>
                         <div class="metric-sub">Awaiting check-in</div>
                     </div>
                 </div>
@@ -1105,12 +1117,12 @@ def index_page():
                             </div>
                         </div>
 
-                        <!-- HR RECENTLY CREATED EMPLOYEES & LOGINS CARD -->
+                        <!-- HR RECENTLY CREATED EMPLOYEES & LOGINS CARD (Shows staff only) -->
                         <div class="card" id="hrRecentLoginsCard">
                             <div class="card-header">
                                 <div class="card-title">
                                     <i class="fa-solid fa-user-shield" style="color:var(--success);"></i>
-                                    Employee Logins &amp; Accounts Directory
+                                    Company Employees Directory
                                 </div>
                                 <button class="btn btn-success" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openCreateEmpModal()">
                                     <i class="fa-solid fa-user-plus"></i> Create Account
@@ -1125,7 +1137,7 @@ def index_page():
                                             <th>Official Email ID</th>
                                             <th>Department</th>
                                             <th>Role</th>
-                                            <th>Status</th>
+                                            <th>Attendance</th>
                                         </tr>
                                     </thead>
                                     <tbody id="hrRecentLoginsTable"></tbody>
@@ -1185,7 +1197,7 @@ def index_page():
                                 </div>
                             </div>
                             <div class="card-body" style="display:flex;flex-direction:column;gap:0.6rem;">
-                                <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="toggleAttendance()">
+                                <button class="btn btn-secondary" id="quickToggleAttBtn" style="justify-content:flex-start;" onclick="toggleAttendance()">
                                     <i class="fa-solid fa-fingerprint" style="color:var(--primary-light);"></i> Toggle Check-In / Check-Out
                                 </button>
                                 <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="switchTab('profile')">
@@ -1201,32 +1213,13 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Attendance (HR Only) -->
+            <!-- Tab: Attendance (HR Only - Monitors Company Staff) -->
             <div id="tab-attendance" class="tab-pane" style="display:none;">
-                <div class="att-banner">
-                    <div style="display:flex;align-items:center;gap:1rem;">
-                        <div class="brand-icon" style="width:48px;height:48px;font-size:1.4rem;">
-                            <i class="fa-solid fa-business-time"></i>
-                        </div>
-                        <div>
-                            <h3 style="font-size:1.15rem;font-weight:700;">Company-Wide Attendance Monitoring</h3>
-                            <p style="font-size:0.82rem;color:var(--text-muted);">
-                                Live overview of active check-ins, worked hours, and daily attendance records.
-                            </p>
-                        </div>
-                    </div>
-                    <div style="display:flex;align-items:center;gap:1rem;">
-                        <button class="btn btn-primary" onclick="toggleAttendance()">
-                            <i class="fa-solid fa-fingerprint"></i> <span id="attBannerBtnLabel">Check In</span>
-                        </button>
-                    </div>
-                </div>
-
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-clock-rotate-left" style="color:var(--primary-light);"></i>
-                            <span>All Staff Attendance Logs (Organization Wide)</span>
+                            <span>Staff Attendance Logs (Company Employees)</span>
                         </div>
                         <div style="display:flex;gap:0.5rem;align-items:center;">
                             <button class="btn btn-danger" style="font-size:0.78rem;padding:0.35rem 0.75rem;" onclick="clearAllAttendanceLogs()">
@@ -1265,10 +1258,10 @@ def index_page():
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-calendar-days" style="color:var(--primary-light);"></i>
-                            Time-Off &amp; Leave Requests
+                            Staff Time-Off &amp; Leave Requests
                         </div>
                         <button class="btn btn-primary" onclick="openLeaveModal()">
-                            <i class="fa-solid fa-plus"></i> Request Time-Off
+                            <i class="fa-solid fa-plus"></i> New Request
                         </button>
                     </div>
                     <div class="card-body" style="padding:0;">
@@ -1290,13 +1283,13 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Employees (HR Only) -->
+            <!-- Tab: Employees (HR Only - Lists Company Staff) -->
             <div id="tab-employees" class="tab-pane" style="display:none;">
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-address-book" style="color:var(--primary-light);"></i>
-                            Employee Directory
+                            Company Employees Directory
                         </div>
                         <button class="btn btn-success" onclick="openCreateEmpModal()">
                             <i class="fa-solid fa-user-plus"></i> Create New Employee &amp; Email ID
@@ -1328,7 +1321,7 @@ def index_page():
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-sack-dollar" style="color:var(--primary-light);"></i>
-                            Compensation &amp; Payroll Layer
+                            Staff Compensation &amp; Payroll
                         </div>
                     </div>
                     <div class="card-body" style="padding:0;">
@@ -1367,7 +1360,7 @@ def index_page():
                                     <input type="text" id="profFullName" class="form-control" placeholder="Your Name" required>
                                 </div>
                                 <div class="form-group">
-                                    <label>Official Email ID <span style="font-size:0.72rem;color:var(--text-muted);font-weight:normal;">(🔒 Assigned by HR &bull; Permanent)</span></label>
+                                    <label>Official Email ID <span style="font-size:0.72rem;color:var(--text-muted);font-weight:normal;">(🔒 Permanent)</span></label>
                                     <input type="email" id="profEmail" class="form-control" style="background:#0b1120;color:#94a3b8;cursor:not-allowed;border-color:#1e293b;" readonly>
                                 </div>
                             </div>
@@ -1948,11 +1941,11 @@ def index_page():
 
             const isAdm = appState && appState.is_admin;
             const titles = {
-                'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Dashboard', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
-                'attendance': ['Company Attendance Logs', 'Daily check-in logs and status classification'],
-                'leaves': ['Time-Off & Leave Management', 'All leave applications and company-wide requests'],
-                'employees': ['Employee Directory', 'Organization team members and login accounts'],
-                'salary': ['Compensation & Banking', 'Full company salary administration'],
+                'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Dashboard', isAdm ? 'Company staff overview and approval queue' : 'Your personal workday schedule & attendance'],
+                'attendance': ['Staff Attendance Monitoring', 'Live check-in logs and status classification for company employees'],
+                'leaves': ['Staff Time-Off & Leave Management', 'All employee leave applications and approval queue'],
+                'employees': ['Company Employees Directory', 'Organization team members and employee accounts'],
+                'salary': ['Staff Compensation & Payroll', 'Company employee salary administration'],
                 'profile': ['My Profile', 'Manage your personal details, phone numbers, and emergency contacts']
             };
             if (titles[tabId]) {
@@ -1983,6 +1976,9 @@ def index_page():
             const rbacNotice = document.getElementById('rbacNoticeText');
             const hrHeaderBtn = document.getElementById('hrCreateEmpHeaderBtn');
             const hrResetDbBtn = document.getElementById('hrResetDbBtn');
+            const heroPunchBox = document.getElementById('heroAttendancePunchBox');
+            const hrExecHeroBadge = document.getElementById('hrExecutiveHeroBadge');
+            const quickToggleAttBtn = document.getElementById('quickToggleAttBtn');
 
             // HIDE/SHOW SIDEBAR TABS BY ROLE (CRITICAL RBAC RULE!)
             const hrTabs = document.querySelectorAll('.hr-only-tab');
@@ -1998,7 +1994,7 @@ def index_page():
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Full organization management privileges.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Master management account.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('employeeMetricsGrid').style.display = 'none';
@@ -2008,6 +2004,13 @@ def index_page():
                 
                 hrHeaderBtn.style.display = 'inline-flex';
                 if (hrResetDbBtn) hrResetDbBtn.style.display = 'inline-flex';
+                
+                // Hide personal punch box for HR Admin in hero
+                if (heroPunchBox) heroPunchBox.style.display = 'none';
+                if (hrExecHeroBadge) hrExecHeroBadge.style.display = 'block';
+                if (quickToggleAttBtn) quickToggleAttBtn.style.display = 'none';
+
+                document.getElementById('headerStatusChip').style.display = 'none';
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
@@ -2027,6 +2030,12 @@ def index_page():
 
                 hrHeaderBtn.style.display = 'none';
                 if (hrResetDbBtn) hrResetDbBtn.style.display = 'none';
+
+                // Show personal punch box for Employee in hero
+                if (heroPunchBox) heroPunchBox.style.display = 'flex';
+                if (hrExecHeroBadge) hrExecHeroBadge.style.display = 'none';
+                if (quickToggleAttBtn) quickToggleAttBtn.style.display = 'flex';
+                document.getElementById('headerStatusChip').style.display = 'flex';
             }
 
             const isCheckedIn = emp && emp.attendance_state === 'checked_in';
@@ -2034,20 +2043,15 @@ def index_page():
             const chipText = document.getElementById('headerStatusText');
             const btn = document.getElementById('toggleAttendanceBtn');
             const btnLabel = document.getElementById('attendanceBtnLabel');
-            const attBannerBtnLabel = document.getElementById('attBannerBtnLabel');
 
             if (isCheckedIn) {
                 chip.className = 'status-chip';
                 chipText.innerText = 'Checked In';
-                btn.className = 'btn btn-danger';
-                btnLabel.innerText = 'Check Out';
-                if (attBannerBtnLabel) attBannerBtnLabel.innerText = 'Check Out';
+                if (btn) { btn.className = 'btn btn-danger'; btnLabel.innerText = 'Check Out'; }
             } else {
                 chip.className = 'status-chip checked_out';
                 chipText.innerText = 'Checked Out';
-                btn.className = 'btn btn-primary';
-                btnLabel.innerText = 'Check In';
-                if (attBannerBtnLabel) attBannerBtnLabel.innerText = 'Check In';
+                if (btn) { btn.className = 'btn btn-primary'; btnLabel.innerText = 'Check In'; }
             }
 
             document.getElementById('greetingText').innerText = `Good day, ${u.name}!`;
@@ -2089,19 +2093,23 @@ def index_page():
                 `).join('');
             }
 
-            // HR Recent Logins & Accounts Table
+            // HR Recent Logins & Accounts Table (Lists Staff Employees Only)
             const hrRecTable = document.getElementById('hrRecentLoginsTable');
             if (hrRecTable && isAdm) {
-                hrRecTable.innerHTML = appState.all_employees.map(e => `
-                    <tr>
-                        <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
-                        <td><strong>${e.name}</strong></td>
-                        <td><span style="color:var(--text-muted);">${e.work_email}</span></td>
-                        <td>${e.department}</td>
-                        <td><span class="badge badge-info">${e.job_title}</span></td>
-                        <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
-                    </tr>
-                `).join('');
+                if (appState.all_employees.length === 0) {
+                    hrRecTable.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No employees created yet. Click <strong>Create Account</strong> to provision employees!</td></tr>`;
+                } else {
+                    hrRecTable.innerHTML = appState.all_employees.map(e => `
+                        <tr>
+                            <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
+                            <td><strong>${e.name}</strong></td>
+                            <td><span style="color:var(--text-muted);">${e.work_email}</span></td>
+                            <td>${e.department}</td>
+                            <td><span class="badge badge-info">${e.job_title}</span></td>
+                            <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
+                        </tr>
+                    `).join('');
+                }
             }
 
             // Employee Workday Summary Table (In Dashboard)
@@ -2153,11 +2161,11 @@ def index_page():
                 document.getElementById('profEmergPhone').value = emp.emergency_contact_phone || '';
             }
 
-            // Attendance Logs Table (HR Tab)
+            // Attendance Logs Table (HR Tab - Monitored Staff Only)
             const attTable = document.getElementById('attendanceLogsTable');
             if (attTable && isAdm) {
                 if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
-                    attTable.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:3rem 1.5rem;color:var(--text-muted);">No attendance records found.</td></tr>`;
+                    attTable.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:3rem 1.5rem;color:var(--text-muted);">No employee attendance records found.</td></tr>`;
                 } else {
                     attTable.innerHTML = appState.attendance_logs.map(a => {
                         const isPresent = (a.status || '').toLowerCase().includes('present');
@@ -2185,50 +2193,56 @@ def index_page():
                 }
             }
 
-            // Employee Directory Table (HR Tab)
+            // Employee Directory Table (HR Tab - Monitored Staff Only)
             const empsTable = document.getElementById('employeesTable');
             if (empsTable && isAdm) {
-                empsTable.innerHTML = appState.all_employees.map(e => `
-                    <tr>
-                        <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
-                        <td><strong>${e.name}</strong></td>
-                        <td>${e.job_title}</td>
-                        <td>${e.department}</td>
-                        <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
-                        <td>${e.private_city}</td>
-                        <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
-                        <td>
-                            <div style="display:flex;gap:0.4rem;align-items:center;">
-                                <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
-                                    <i class="fa-solid fa-key"></i> Reset Pwd
-                                </button>
-                                ${e.id !== 1 ? `
+                if (appState.all_employees.length === 0) {
+                    empsTable.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2.5rem;color:var(--text-muted);">No employees registered yet. Click <strong>Create New Employee &amp; Email ID</strong> above to add staff!</td></tr>`;
+                } else {
+                    empsTable.innerHTML = appState.all_employees.map(e => `
+                        <tr>
+                            <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
+                            <td><strong>${e.name}</strong></td>
+                            <td>${e.job_title}</td>
+                            <td>${e.department}</td>
+                            <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
+                            <td>${e.private_city}</td>
+                            <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
+                            <td>
+                                <div style="display:flex;gap:0.4rem;align-items:center;">
+                                    <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
+                                        <i class="fa-solid fa-key"></i> Reset Pwd
+                                    </button>
                                     <button class="btn btn-danger" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="deleteEmployee(${e.id}, '${e.name}')">
                                         <i class="fa-solid fa-trash"></i> Delete
                                     </button>
-                                ` : ``}
-                            </div>
-                        </td>
-                    </tr>
-                `).join('');
+                                </div>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
             }
 
-            // Salary Table (HR Tab)
+            // Salary Table (HR Tab - Monitored Staff Only)
             const salTable = document.getElementById('salaryTable');
             if (salTable && isAdm) {
-                salTable.innerHTML = appState.salary_records.map(e => `
-                    <tr>
-                        <td><strong>${e.name}</strong></td>
-                        <td>${e.dayflow_emp_id}</td>
-                        <td><strong style="color:var(--success);font-size:0.95rem;">$${e.salary_amount.toLocaleString()}.00</strong></td>
-                        <td>${e.salary_type}</td>
-                        <td>${e.bank_name}</td>
-                        <td><span style="font-family:'JetBrains Mono'">${e.bank_account_no}</span></td>
-                        <td>
-                            <button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
-                        </td>
-                    </tr>
-                `).join('');
+                if (appState.salary_records.length === 0) {
+                    salTable.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2.5rem;color:var(--text-muted);">No employee payroll records found.</td></tr>`;
+                } else {
+                    salTable.innerHTML = appState.salary_records.map(e => `
+                        <tr>
+                            <td><strong>${e.name}</strong></td>
+                            <td>${e.dayflow_emp_id}</td>
+                            <td><strong style="color:var(--success);font-size:0.95rem;">$${e.salary_amount.toLocaleString()}.00</strong></td>
+                            <td>${e.salary_type}</td>
+                            <td>${e.bank_name}</td>
+                            <td><span style="font-family:'JetBrains Mono'">${e.bank_account_no}</span></td>
+                            <td>
+                                <button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
             }
         }
 
@@ -2268,7 +2282,8 @@ if __name__ == "__main__":
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
+    print("   * Excluded HR Admin from Company Employee Attendance Monitoring Roster")
     print("   * Employee RBAC: Restricted to Dashboard & My Profile only")
-    print("   * Official Email ID: Permanent & Read-Only for Employees")
+    print("   * Official Email ID: Permanent & Read-Only")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
