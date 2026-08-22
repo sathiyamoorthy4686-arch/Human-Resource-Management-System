@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Authentication & RBAC Enabled Server
-Complete HR Employee Provisioning with Email ID, Custom Password Generator,
-Credential Management, and Role-Based Access Controls.
+Dayflow HRMS - Authentication, RBAC & Attendance Management Server
+Real-Time Attendance Logging, HR Employee Provisioning & Credential System.
 """
 
 import os
@@ -24,6 +23,13 @@ def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 DEFAULT_PASS = hash_pw("dayflow123")
+
+# Time helpers
+now = datetime.now()
+today_str = now.strftime("%Y-%m-%d")
+yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+two_days_ago_str = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+three_days_ago_str = (now - timedelta(days=3)).strftime("%Y-%m-%d")
 
 DB = {
     "users": {
@@ -104,7 +110,7 @@ DB = {
             "emergency_contact_relation": "Spouse",
             "emergency_contact_phone": "+1 555-0109",
             "attendance_state": "checked_in",
-            "last_check_in": (datetime.now() - timedelta(hours=3, minutes=24)).isoformat(),
+            "last_check_in": (now - timedelta(hours=3, minutes=24)).strftime("%Y-%m-%d %H:%M"),
             "worked_hours": 3.4
         },
         {
@@ -126,7 +132,7 @@ DB = {
             "emergency_contact_relation": "Parent",
             "emergency_contact_phone": "+1 555-0209",
             "attendance_state": "checked_in",
-            "last_check_in": (datetime.now() - timedelta(hours=2, minutes=15)).isoformat(),
+            "last_check_in": (now - timedelta(hours=2, minutes=15)).strftime("%Y-%m-%d %H:%M"),
             "worked_hours": 2.25
         },
         {
@@ -208,36 +214,91 @@ DB = {
             "manager_comment": "Approved by Alex Morgan. Rest well!"
         }
     ],
+    # Rich Attendance Records
     "attendance_logs": [
         {
             "id": 1,
             "employee_id": 1,
             "employee_name": "Alex Morgan",
             "dayflow_emp_id": "DF-1001",
-            "check_in": (datetime.now() - timedelta(hours=3, minutes=24)).strftime("%Y-%m-%d %H:%M"),
-            "check_out": "-",
+            "department": "Human Resources",
+            "date": today_str,
+            "check_in": f"{today_str} 08:30",
+            "check_out": "In Progress (Active)",
             "status": "Present",
-            "worked_hours": "3.4h"
+            "worked_hours": "3.4 hrs"
         },
         {
             "id": 2,
             "employee_id": 2,
             "employee_name": "Jordan Smith",
             "dayflow_emp_id": "DF-1002",
-            "check_in": (datetime.now() - timedelta(hours=2, minutes=15)).strftime("%Y-%m-%d %H:%M"),
-            "check_out": "-",
+            "department": "Engineering",
+            "date": today_str,
+            "check_in": f"{today_str} 09:15",
+            "check_out": "In Progress (Active)",
             "status": "Present",
-            "worked_hours": "2.25h"
+            "worked_hours": "2.2 hrs"
         },
         {
             "id": 3,
+            "employee_id": 1,
+            "employee_name": "Alex Morgan",
+            "dayflow_emp_id": "DF-1001",
+            "department": "Human Resources",
+            "date": yesterday_str,
+            "check_in": f"{yesterday_str} 09:00",
+            "check_out": f"{yesterday_str} 17:30",
+            "status": "Present",
+            "worked_hours": "8.5 hrs"
+        },
+        {
+            "id": 4,
+            "employee_id": 2,
+            "employee_name": "Jordan Smith",
+            "dayflow_emp_id": "DF-1002",
+            "department": "Engineering",
+            "date": yesterday_str,
+            "check_in": f"{yesterday_str} 09:05",
+            "check_out": f"{yesterday_str} 18:00",
+            "status": "Present",
+            "worked_hours": "8.9 hrs"
+        },
+        {
+            "id": 5,
             "employee_id": 4,
             "employee_name": "Casey Patel",
             "dayflow_emp_id": "DF-1004",
-            "check_in": (datetime.now() - timedelta(days=1, hours=8)).strftime("%Y-%m-%d 09:00"),
-            "check_out": (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d 17:30"),
+            "department": "Operations",
+            "date": yesterday_str,
+            "check_in": f"{yesterday_str} 08:45",
+            "check_out": f"{yesterday_str} 17:15",
             "status": "Present",
-            "worked_hours": "8.5h"
+            "worked_hours": "8.5 hrs"
+        },
+        {
+            "id": 6,
+            "employee_id": 3,
+            "employee_name": "Taylor Reed",
+            "dayflow_emp_id": "DF-1003",
+            "department": "Marketing & Growth",
+            "date": two_days_ago_str,
+            "check_in": f"{two_days_ago_str} 09:10",
+            "check_out": f"{two_days_ago_str} 13:30",
+            "status": "Half-day",
+            "worked_hours": "4.3 hrs"
+        },
+        {
+            "id": 7,
+            "employee_id": 2,
+            "employee_name": "Jordan Smith",
+            "dayflow_emp_id": "DF-1002",
+            "department": "Engineering",
+            "date": three_days_ago_str,
+            "check_in": f"{three_days_ago_str} 09:00",
+            "check_out": f"{three_days_ago_str} 17:45",
+            "status": "Present",
+            "worked_hours": "8.7 hrs"
         }
     ],
     "sessions": {}
@@ -363,7 +424,6 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     role_type = "admin" if is_admin_role else "employee"
     role_label = "HR Administrator" if is_admin_role else f"Employee ({payload.job_title})"
 
-    # 1. Provision User Login Account with password
     new_user = {
         "id": user_id,
         "login": email,
@@ -380,7 +440,6 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     }
     DB["users"][email] = new_user
 
-    # 2. Provision Employee Directory & Compensation Profile
     new_emp = {
         "id": emp_id_num,
         "user_id": user_id,
@@ -404,6 +463,20 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
         "worked_hours": 0.0
     }
     DB["employees"].append(new_emp)
+
+    # Pre-seed initial onboarding attendance log
+    DB["attendance_logs"].insert(0, {
+        "id": len(DB["attendance_logs"]) + 1,
+        "employee_id": emp_id_num,
+        "employee_name": payload.name.strip(),
+        "dayflow_emp_id": dayflow_id,
+        "department": payload.department,
+        "date": today_str,
+        "check_in": f"{today_str} 09:00",
+        "check_out": f"{today_str} 17:00",
+        "status": "Present",
+        "worked_hours": "8.0 hrs"
+    })
 
     return {
         "success": True,
@@ -456,13 +529,13 @@ def get_state(authorization: Optional[str] = Header(None)):
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
     is_admin = user.get("is_admin", False) or user.get("is_officer", False)
 
+    # Attendance logs: HR sees all, Employee sees own
     if is_admin:
         attendance_logs = DB["attendance_logs"]
         all_leaves = DB["leaves"]
         pending_leaves = [l for l in DB["leaves"] if l["state"] == "confirm"]
         salary_records = DB["employees"]
         
-        # Include current login password info for HR Management
         employees_list = []
         for e in DB["employees"]:
             u = DB["users"].get(e["work_email"])
@@ -519,25 +592,54 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
     if not emp:
         raise HTTPException(status_code=404, detail="Employee profile not found")
 
-    now = datetime.now()
+    cur_time = datetime.now()
+    cur_time_str = cur_time.strftime("%Y-%m-%d %H:%M")
+    cur_date_str = cur_time.strftime("%Y-%m-%d")
+
     if emp["attendance_state"] == "checked_in":
+        # Check out
         emp["attendance_state"] = "checked_out"
+        
+        # Find active log or create one
+        active_log = next((a for a in DB["attendance_logs"] if a.get("employee_id") == emp["id"] and "In Progress" in str(a.get("check_out", ""))), None)
+        if active_log:
+            active_log["check_out"] = cur_time_str
+            active_log["status"] = "Present"
+            active_log["worked_hours"] = f"{emp['worked_hours']:.1f} hrs"
+        else:
+            DB["attendance_logs"].insert(0, {
+                "id": len(DB["attendance_logs"]) + 1,
+                "employee_id": emp["id"],
+                "employee_name": emp["name"],
+                "dayflow_emp_id": emp["dayflow_emp_id"],
+                "department": emp["department"],
+                "date": cur_date_str,
+                "check_in": emp["last_check_in"] or cur_time_str,
+                "check_out": cur_time_str,
+                "status": "Present",
+                "worked_hours": f"{emp['worked_hours']:.1f} hrs"
+            })
+        return {"status": "checked_out", "message": f"Successfully checked out, {emp['name']}. Have a great evening!"}
+    else:
+        # Check in
+        emp["attendance_state"] = "checked_in"
+        emp["last_check_in"] = cur_time_str
+        emp["worked_hours"] = 0.1
+
+        # Add active log immediately
         DB["attendance_logs"].insert(0, {
             "id": len(DB["attendance_logs"]) + 1,
             "employee_id": emp["id"],
             "employee_name": emp["name"],
             "dayflow_emp_id": emp["dayflow_emp_id"],
-            "check_in": emp["last_check_in"] or now.strftime("%Y-%m-%d %H:%M"),
-            "check_out": now.strftime("%Y-%m-%d %H:%M"),
+            "department": emp["department"],
+            "date": cur_date_str,
+            "check_in": cur_time_str,
+            "check_out": "In Progress (Active)",
             "status": "Present",
-            "worked_hours": f"{emp['worked_hours']:.1f}h"
+            "worked_hours": "0.1 hrs"
         })
-        return {"status": "checked_out", "message": f"Successfully checked out, {emp['name']}."}
-    else:
-        emp["attendance_state"] = "checked_in"
-        emp["last_check_in"] = now.strftime("%Y-%m-%d %H:%M")
-        emp["worked_hours"] = 0.1
-        return {"status": "checked_in", "message": f"Welcome, {emp['name']}! Checked in successfully."}
+        return {"status": "checked_in", "message": f"Welcome, {emp['name']}! Checked in for today's workday."}
 
 @app.post("/api/submit_leave")
 def submit_leave(req: LeaveRequestPayload, authorization: Optional[str] = Header(None)):
@@ -855,6 +957,18 @@ def index_page():
         }
         .copy-btn { background: none; border: none; color: var(--primary-light); cursor: pointer; font-size: 0.9rem; padding: 0.2rem 0.5rem; }
         .copy-btn:hover { color: white; }
+
+        /* Attendance Tab Hero */
+        .att-banner {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 1.5rem;
+        }
     </style>
 </head>
 <body>
@@ -1100,20 +1214,46 @@ def index_page():
 
             <!-- Tab: Attendance -->
             <div id="tab-attendance" class="tab-pane" style="display:none;">
+                
+                <!-- ATTENDANCE QUICK ACTION BANNER -->
+                <div class="att-banner">
+                    <div style="display:flex;align-items:center;gap:1rem;">
+                        <div class="brand-icon" style="width:48px;height:48px;font-size:1.4rem;">
+                            <i class="fa-solid fa-business-time"></i>
+                        </div>
+                        <div>
+                            <h3 style="font-size:1.15rem;font-weight:700;" id="attTabTitle">Daily Attendance Record</h3>
+                            <p style="font-size:0.82rem;color:var(--text-muted);" id="attTabSub">
+                                Real-time check-in, check-out timestamps, and automatic status classification.
+                            </p>
+                        </div>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:1rem;">
+                        <button class="btn btn-primary" onclick="toggleAttendance()">
+                            <i class="fa-solid fa-fingerprint"></i> <span id="attBannerBtnLabel">Check Out</span>
+                        </button>
+                    </div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">
                             <i class="fa-solid fa-clock-rotate-left" style="color:var(--primary-light);"></i>
-                            Attendance Logs &amp; Classification
+                            <span id="attCardHeading">Attendance Logs &amp; Classification</span>
                         </div>
+                        <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="fetchState()">
+                            <i class="fa-solid fa-rotate"></i> Refresh Logs
+                        </button>
                     </div>
                     <div class="card-body" style="padding:0;">
                         <table>
                             <thead>
                                 <tr>
-                                    <th>ID</th>
+                                    <th># Log</th>
                                     <th>Employee</th>
                                     <th>Dayflow ID</th>
+                                    <th>Department</th>
+                                    <th>Date</th>
                                     <th>Check In</th>
                                     <th>Check Out</th>
                                     <th>Status</th>
@@ -1752,6 +1892,9 @@ def index_page():
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
                 hrHeaderBtn.style.display = 'inline-flex';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'inline-flex';
+                document.getElementById('attCardHeading').innerText = 'All Staff Attendance Logs (Organization Wide)';
+                document.getElementById('attTabTitle').innerText = 'Company-Wide Attendance Monitoring';
+                document.getElementById('attTabSub').innerText = 'Live overview of active check-ins, worked hours, and daily attendance records.';
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
@@ -1760,6 +1903,9 @@ def index_page():
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
                 hrHeaderBtn.style.display = 'none';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'none';
+                document.getElementById('attCardHeading').innerText = 'My Personal Attendance Logs';
+                document.getElementById('attTabTitle').innerText = 'My Workday Attendance';
+                document.getElementById('attTabSub').innerText = 'Your personal check-in/out timestamps and worked hours.';
             }
 
             const isCheckedIn = emp && emp.attendance_state === 'checked_in';
@@ -1767,17 +1913,20 @@ def index_page():
             const chipText = document.getElementById('headerStatusText');
             const btn = document.getElementById('toggleAttendanceBtn');
             const btnLabel = document.getElementById('attendanceBtnLabel');
+            const attBannerBtnLabel = document.getElementById('attBannerBtnLabel');
 
             if (isCheckedIn) {
                 chip.className = 'status-chip';
                 chipText.innerText = 'Checked In';
                 btn.className = 'btn btn-danger';
                 btnLabel.innerText = 'Check Out';
+                if (attBannerBtnLabel) attBannerBtnLabel.innerText = 'Check Out';
             } else {
                 chip.className = 'status-chip checked_out';
                 chipText.innerText = 'Checked Out';
                 btn.className = 'btn btn-primary';
                 btnLabel.innerText = 'Check In';
+                if (attBannerBtnLabel) attBannerBtnLabel.innerText = 'Check In';
             }
 
             document.getElementById('greetingText').innerText = `Good day, ${u.name}!`;
@@ -1830,18 +1979,45 @@ def index_page():
                 `;
             }
 
+            // Attendance Logs Table (with Empty State fallback)
             const attTable = document.getElementById('attendanceLogsTable');
-            attTable.innerHTML = appState.attendance_logs.map(a => `
-                <tr>
-                    <td>#${a.id}</td>
-                    <td><strong>${a.employee_name}</strong></td>
-                    <td><span style="font-family:'JetBrains Mono'">${a.dayflow_emp_id}</span></td>
-                    <td>${a.check_in}</td>
-                    <td>${a.check_out}</td>
-                    <td><span class="badge ${a.status.toLowerCase().includes('present') ? 'badge-approved' : 'badge-info'}">${a.status}</span></td>
-                    <td><strong>${a.worked_hours}</strong></td>
-                </tr>
-            `).join('');
+            if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
+                attTable.innerHTML = `
+                    <tr>
+                        <td colspan="9" style="text-align:center;padding:3rem 1.5rem;">
+                            <div style="display:flex;flex-direction:column;align-items:center;gap:0.75rem;">
+                                <i class="fa-solid fa-clock-rotate-left" style="font-size:2.2rem;color:var(--primary-light);opacity:0.6;"></i>
+                                <h4 style="font-size:1.05rem;color:white;">No attendance records found yet</h4>
+                                <p style="font-size:0.85rem;color:var(--text-muted);max-width:400px;">
+                                    Click <strong>Check In</strong> above to record your attendance for today's workday!
+                                </p>
+                                <button class="btn btn-primary" style="margin-top:0.4rem;" onclick="toggleAttendance()">
+                                    <i class="fa-solid fa-fingerprint"></i> Check In Now
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            } else {
+                attTable.innerHTML = appState.attendance_logs.map(a => {
+                    const isPresent = (a.status || '').toLowerCase().includes('present');
+                    const isHalf = (a.status || '').toLowerCase().includes('half');
+                    let badgeClass = isPresent ? 'badge-approved' : (isHalf ? 'badge-pending' : 'badge-info');
+                    return `
+                        <tr>
+                            <td><strong style="color:var(--text-muted);">#${a.id}</strong></td>
+                            <td><strong style="color:white;">${a.employee_name}</strong></td>
+                            <td><span style="font-family:'JetBrains Mono';color:var(--primary-light);">${a.dayflow_emp_id || 'DF-XXXX'}</span></td>
+                            <td><span style="font-size:0.82rem;color:var(--text-muted);">${a.department || 'General'}</span></td>
+                            <td>${a.date || a.check_in.split(' ')[0]}</td>
+                            <td><span style="color:#6ee7b7;"><i class="fa-solid fa-arrow-right-to-bracket"></i> ${a.check_in}</span></td>
+                            <td>${a.check_out && a.check_out.includes('Progress') ? `<span class="badge badge-pending"><i class="fa-solid fa-circle-dot"></i> In Progress</span>` : `<span style="color:#f87171;"><i class="fa-solid fa-arrow-right-from-bracket"></i> ${a.check_out || '—'}</span>`}</td>
+                            <td><span class="badge ${badgeClass}">${a.status}</span></td>
+                            <td><strong style="font-family:'JetBrains Mono';">${a.worked_hours}</strong></td>
+                        </tr>
+                    `;
+                }).join('');
+            }
 
             const allLeavesTable = document.getElementById('allLeavesTable');
             allLeavesTable.innerHTML = appState.all_leaves.map(l => {
@@ -1942,9 +2118,9 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
+    print("   * Attendance Logs & Status Classification (Present, Half-Day)")
     print("   * Create New Employee & Email ID with Password Generator")
     print("   * Employee Credential Copy Modal & Password Reset Workflow")
     print("   * RBAC Security: HR Director (Admin) vs Internal Employee")
-    print("   * Real-time Attendance, Leaves & Compensation Management")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
