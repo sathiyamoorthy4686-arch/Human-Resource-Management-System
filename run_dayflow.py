@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Authentication, RBAC & Attendance Management Server
-Real-Time Attendance Logging, HR Employee Provisioning & Credential System.
+Dayflow HRMS - Authentication, RBAC & Role-Specific Dashboards
+Features Dynamic User Discovery, Employee Personal Dashboard, HR Organization Dashboard,
+Live Attendance Tracking, and Credential Provisioning.
 """
 
 import os
@@ -214,7 +215,6 @@ DB = {
             "manager_comment": "Approved by Alex Morgan. Rest well!"
         }
     ],
-    # Rich Attendance Records
     "attendance_logs": [
         {
             "id": 1,
@@ -371,16 +371,32 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
         raise HTTPException(status_code=401, detail="Invalid session user")
     return user
 
-# ================= AUTHENTICATION ENDPOINTS =================
+# ================= PUBLIC & AUTH ENDPOINTS =================
+
+@app.get("/api/auth/demo_users")
+def get_demo_users():
+    """Returns list of registered users for quick login modal."""
+    return [
+        {
+            "name": u["name"],
+            "email": u["email"],
+            "role": u["role"],
+            "role_label": u["role_label"],
+            "is_admin": u.get("is_admin", False),
+            "password": u.get("password_plain", "dayflow123")
+        }
+        for u in DB["users"].values()
+    ]
 
 @app.post("/api/auth/login")
 def login_user(payload: LoginPayload):
     email = payload.email.strip().lower()
     user = DB["users"].get(email)
     if not user:
-        raise HTTPException(status_code=401, detail="No account found with this email ID.")
+        raise HTTPException(status_code=401, detail=f"No account found with Email ID: '{email}'. Please check credentials or ask HR to create one.")
     if user["password_hash"] != hash_pw(payload.password):
-        raise HTTPException(status_code=401, detail="Invalid password credentials.")
+        raise HTTPException(status_code=401, detail="Invalid password. Please verify and try again.")
+    
     token = f"sess-{uuid.uuid4().hex[:16]}"
     DB["sessions"][token] = email
     return {
@@ -394,7 +410,8 @@ def login_user(payload: LoginPayload):
             "role": user["role"],
             "role_label": user["role_label"],
             "is_admin": user["is_admin"],
-            "is_officer": user["is_officer"]
+            "is_officer": user["is_officer"],
+            "employee_id": user["employee_id"]
         }
     }
 
@@ -409,7 +426,7 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
 
     email = payload.email.strip().lower()
     if email in DB["users"]:
-        raise HTTPException(status_code=400, detail="An employee with this Email ID already exists in the system.")
+        raise HTTPException(status_code=400, detail=f"An employee with Email ID '{email}' already exists in the system.")
 
     password_clean = payload.password.strip()
     if not password_clean:
@@ -464,7 +481,7 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     }
     DB["employees"].append(new_emp)
 
-    # Pre-seed initial onboarding attendance log
+    # Initial Welcome Attendance Log for the new employee
     DB["attendance_logs"].insert(0, {
         "id": len(DB["attendance_logs"]) + 1,
         "employee_id": emp_id_num,
@@ -521,15 +538,15 @@ def logout_user(authorization: Optional[str] = Header(None)):
             del DB["sessions"][token]
     return {"success": True, "message": "Logged out successfully."}
 
-# ================= STATE & WORKFLOWS =================
+# ================= STATE & ROLE-BASED DASHBOARD PAYLOAD =================
 
 @app.get("/api/state")
 def get_state(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
+    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     is_admin = user.get("is_admin", False) or user.get("is_officer", False)
 
-    # Attendance logs: HR sees all, Employee sees own
+    # Attendance logs: HR sees all, Employee sees their own
     if is_admin:
         attendance_logs = DB["attendance_logs"]
         all_leaves = DB["leaves"]
@@ -541,11 +558,13 @@ def get_state(authorization: Optional[str] = Header(None)):
             u = DB["users"].get(e["work_email"])
             employees_list.append({
                 **e,
-                "login_password": u.get("password_plain", "dayflow123") if u else "dayflow123"
+                "login_password": u.get("password_plain", "dayflow123") if u else "dayflow123",
+                "created_at": u.get("created_at") if u else None
             })
     else:
-        attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == user["employee_id"]]
-        all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == user["employee_id"]]
+        emp_id = emp["id"] if emp else user["employee_id"]
+        attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == emp_id or a.get("dayflow_emp_id") == (emp["dayflow_emp_id"] if emp else "")]
+        all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == emp_id]
         pending_leaves = []
         salary_records = [emp] if emp else []
         employees_list = [
@@ -567,6 +586,30 @@ def get_state(authorization: Optional[str] = Header(None)):
     on_leave = len([l for l in DB["leaves"] if l["state"] == "validate" and l["number_of_days"] > 0 and "Sick" in l["type"]])
     absent_emps = max(0, total_emps - present_emps - on_leave)
 
+    # Employee personal leave balance calculation
+    emp_leaves_taken = sum(l["number_of_days"] for l in all_leaves if l["state"] == "validate" and "PTO" in l["type"])
+    emp_sick_taken = sum(l["number_of_days"] for l in all_leaves if l["state"] == "validate" and "Sick" in l["type"])
+
+    emp_metrics = {
+        "worked_today": f"{emp['worked_hours']:.1f} hrs" if emp else "0.0 hrs",
+        "pto_balance": max(0, 20 - int(emp_leaves_taken)),
+        "sick_balance": max(0, 12 - int(emp_sick_taken)),
+        "my_pending_leaves": len([l for l in all_leaves if l["state"] == "confirm"])
+    }
+
+    # All registered accounts for quick-switch list
+    all_users_summary = [
+        {
+            "name": u["name"],
+            "email": u["email"],
+            "role": u["role"],
+            "role_label": u["role_label"],
+            "is_admin": u.get("is_admin", False),
+            "password": u.get("password_plain", "dayflow123")
+        }
+        for u in DB["users"].values()
+    ]
+
     return {
         "current_user": user,
         "employee": emp,
@@ -578,17 +621,19 @@ def get_state(authorization: Optional[str] = Header(None)):
             "absent_today": absent_emps,
             "attendance_rate": round((present_emps / total_emps * 100), 1) if total_emps > 0 else 0
         },
+        "emp_metrics": emp_metrics,
         "pending_leaves": pending_leaves,
         "all_leaves": all_leaves,
         "all_employees": employees_list,
         "salary_records": salary_records,
-        "attendance_logs": attendance_logs
+        "attendance_logs": attendance_logs,
+        "all_users": all_users_summary
     }
 
 @app.post("/api/toggle_attendance")
 def toggle_attendance(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
+    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     if not emp:
         raise HTTPException(status_code=404, detail="Employee profile not found")
 
@@ -600,8 +645,7 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
         # Check out
         emp["attendance_state"] = "checked_out"
         
-        # Find active log or create one
-        active_log = next((a for a in DB["attendance_logs"] if a.get("employee_id") == emp["id"] and "In Progress" in str(a.get("check_out", ""))), None)
+        active_log = next((a for a in DB["attendance_logs"] if (a.get("employee_id") == emp["id"] or a.get("dayflow_emp_id") == emp["dayflow_emp_id"]) and "In Progress" in str(a.get("check_out", ""))), None)
         if active_log:
             active_log["check_out"] = cur_time_str
             active_log["status"] = "Present"
@@ -619,14 +663,13 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
                 "status": "Present",
                 "worked_hours": f"{emp['worked_hours']:.1f} hrs"
             })
-        return {"status": "checked_out", "message": f"Successfully checked out, {emp['name']}. Have a great evening!"}
+        return {"status": "checked_out", "message": f"Checked out successfully, {emp['name']}."}
     else:
         # Check in
         emp["attendance_state"] = "checked_in"
         emp["last_check_in"] = cur_time_str
-        emp["worked_hours"] = 0.1
+        emp["worked_hours"] = 0.5
 
-        # Add active log immediately
         DB["attendance_logs"].insert(0, {
             "id": len(DB["attendance_logs"]) + 1,
             "employee_id": emp["id"],
@@ -637,14 +680,14 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
             "check_in": cur_time_str,
             "check_out": "In Progress (Active)",
             "status": "Present",
-            "worked_hours": "0.1 hrs"
+            "worked_hours": "0.5 hrs"
         })
-        return {"status": "checked_in", "message": f"Welcome, {emp['name']}! Checked in for today's workday."}
+        return {"status": "checked_in", "message": f"Checked in successfully! Welcome, {emp['name']}."}
 
 @app.post("/api/submit_leave")
 def submit_leave(req: LeaveRequestPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
+    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -697,7 +740,7 @@ def refuse_leave(payload: LeaveActionPayload, authorization: Optional[str] = Hea
 @app.post("/api/update_profile")
 def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
+    emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
@@ -778,7 +821,7 @@ def index_page():
         .auth-card {
             background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(16px);
             border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 20px;
-            width: 100%; max-width: 480px; box-shadow: var(--shadow-lg), var(--shadow-glow);
+            width: 100%; max-width: 520px; box-shadow: var(--shadow-lg), var(--shadow-glow);
             overflow: hidden; animation: fadeIn 0.3s ease;
         }
 
@@ -786,11 +829,11 @@ def index_page():
 
         .auth-header { padding: 2rem 2rem 1.25rem; text-align: center; border-bottom: 1px solid var(--border); }
         .auth-brand { display: inline-flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
-        .auth-body { padding: 1.75rem 2rem; }
+        .auth-body { padding: 1.75rem 2rem; max-height: 80vh; overflow-y: auto; }
 
         .demo-pills { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px dashed var(--border); }
-        .demo-pills-title { font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; letter-spacing: 0.05em; }
-        .pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .demo-pills-title { font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; letter-spacing: 0.05em; display: flex; justify-content: space-between; align-items: center; }
+        .pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; max-height: 200px; overflow-y: auto; padding-right: 2px; }
 
         .demo-btn {
             background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
@@ -798,7 +841,7 @@ def index_page():
             cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; flex-direction: column; gap: 0.15rem;
         }
         .demo-btn:hover { border-color: var(--primary); background: rgba(99, 102, 241, 0.1); color: white; }
-        .demo-btn span { font-size: 0.65rem; color: var(--primary-light); }
+        .demo-btn span { font-size: 0.65rem; color: var(--primary-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         /* Sidebar */
         aside {
@@ -908,6 +951,7 @@ def index_page():
         .icon-green { background: rgba(16, 185, 129, 0.15); color: #34d399; }
         .icon-yellow { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
         .icon-red { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+        .icon-purple { background: rgba(168, 85, 247, 0.15); color: #c084fc; }
         .metric-value { font-size: 1.85rem; font-weight: 800; color: white; font-family: 'JetBrains Mono', monospace; }
         .metric-sub { font-size: 0.75rem; color: var(--text-muted); }
 
@@ -958,16 +1002,9 @@ def index_page():
         .copy-btn { background: none; border: none; color: var(--primary-light); cursor: pointer; font-size: 0.9rem; padding: 0.2rem 0.5rem; }
         .copy-btn:hover { color: white; }
 
-        /* Attendance Tab Hero */
         .att-banner {
-            background: rgba(0, 0, 0, 0.25);
-            border: 1px solid var(--border);
-            border-radius: 12px;
-            padding: 1.25rem 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 1.5rem;
+            background: rgba(0, 0, 0, 0.25); border: 1px solid var(--border); border-radius: 12px;
+            padding: 1.25rem 1.5rem; display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem;
         }
     </style>
 </head>
@@ -1001,26 +1038,14 @@ def index_page():
                         <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to HRMS
                     </button>
 
-                    <!-- Quick Demo Accounts -->
+                    <!-- Quick Demo Accounts (Dynamically lists all users!) -->
                     <div class="demo-pills">
-                        <div class="demo-pills-title"><i class="fa-solid fa-bolt-lightning"></i> 1-Click Quick Demo Sign In</div>
-                        <div class="pill-grid">
-                            <button type="button" class="demo-btn" onclick="quickFill('alex.morgan@dayflow.demo', 'dayflow123')">
-                                <strong>Alex Morgan</strong>
-                                <span>HR Director (Admin)</span>
-                            </button>
-                            <button type="button" class="demo-btn" onclick="quickFill('jordan.smith@dayflow.demo', 'dayflow123')">
-                                <strong>Jordan Smith</strong>
-                                <span>Senior Engineer (Employee)</span>
-                            </button>
-                            <button type="button" class="demo-btn" onclick="quickFill('taylor.reed@dayflow.demo', 'dayflow123')">
-                                <strong>Taylor Reed</strong>
-                                <span>Marketing Lead (Employee)</span>
-                            </button>
-                            <button type="button" class="demo-btn" onclick="quickFill('casey.patel@dayflow.demo', 'dayflow123')">
-                                <strong>Casey Patel</strong>
-                                <span>Operations (Employee)</span>
-                            </button>
+                        <div class="demo-pills-title">
+                            <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In Accounts</span>
+                            <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">4 accounts</span>
+                        </div>
+                        <div class="pill-grid" id="quickUsersList">
+                            <!-- Populated dynamically -->
                         </div>
                     </div>
                 </form>
@@ -1082,7 +1107,7 @@ def index_page():
         <header>
             <div class="header-title">
                 <h2 id="pageTitle">
-                    HR Administrator Dashboard
+                    Dashboard
                     <span class="role-pill admin" id="headerRoleBadge"><i class="fa-solid fa-shield-halved"></i> HR Admin</span>
                 </h2>
                 <p id="pageSubtitle">Every workday, perfectly aligned.</p>
@@ -1133,7 +1158,7 @@ def index_page():
                     <span id="rbacNoticeText">RBAC Active: You have Full HR Management privileges.</span>
                 </div>
 
-                <!-- Admin Metrics -->
+                <!-- HR ADMIN METRICS GRID -->
                 <div class="metrics-grid" id="adminMetricsGrid">
                     <div class="metric-card">
                         <div class="metric-header">
@@ -1169,53 +1194,174 @@ def index_page():
                     </div>
                 </div>
 
-                <!-- Approvals & Profile -->
-                <div class="grid-2" style="margin-top: 1.5rem;">
-                    <div class="card" id="pendingApprovalsCard">
-                        <div class="card-header">
-                            <div class="card-title">
-                                <i class="fa-solid fa-inbox" style="color:var(--primary-light);"></i>
-                                Pending Leave Approvals (HR Queue)
-                            </div>
-                            <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openLeaveModal()">
-                                <i class="fa-solid fa-plus"></i> New Request
-                            </button>
+                <!-- EMPLOYEE PERSONAL METRICS GRID -->
+                <div class="metrics-grid" id="employeeMetricsGrid" style="display:none;">
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Hours Worked Today</span>
+                            <div class="metric-icon icon-blue"><i class="fa-solid fa-clock"></i></div>
                         </div>
-                        <div class="card-body" style="padding:0;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Employee</th>
-                                        <th>Type</th>
-                                        <th>Duration</th>
-                                        <th>Days</th>
-                                        <th>Remarks</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="pendingLeavesTable"></tbody>
-                            </table>
+                        <div class="metric-value" id="empWorkedHoursMetric">0.0 hrs</div>
+                        <div class="metric-sub" id="empAttendanceStatusSub">Status: Checked Out</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Paid Time Off (PTO)</span>
+                            <div class="metric-icon icon-green"><i class="fa-solid fa-plane-departure"></i></div>
+                        </div>
+                        <div class="metric-value" id="empPtoMetric">20 Days</div>
+                        <div class="metric-sub">Annual vacation allowance</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">Sick Leave Balance</span>
+                            <div class="metric-icon icon-yellow"><i class="fa-solid fa-notes-medical"></i></div>
+                        </div>
+                        <div class="metric-value" id="empSickMetric">12 Days</div>
+                        <div class="metric-sub">Medical leave remaining</div>
+                    </div>
+                    <div class="metric-card">
+                        <div class="metric-header">
+                            <span class="metric-title">My Pending Requests</span>
+                            <div class="metric-icon icon-purple"><i class="fa-solid fa-hourglass-half"></i></div>
+                        </div>
+                        <div class="metric-value" id="empPendingLeavesMetric">0</div>
+                        <div class="metric-sub">Awaiting HR decision</div>
+                    </div>
+                </div>
+
+                <!-- Dashboard Content Grid -->
+                <div class="grid-2" style="margin-top: 1.5rem;">
+                    
+                    <!-- LEFT COLUMN: HR Queue OR Employee Leaves -->
+                    <div style="display:flex;flex-direction:column;gap:1.5rem;">
+                        
+                        <!-- HR Pending Approvals Queue -->
+                        <div class="card" id="pendingApprovalsCard">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fa-solid fa-inbox" style="color:var(--primary-light);"></i>
+                                    Pending Leave Approvals (HR Queue)
+                                </div>
+                                <button class="btn btn-secondary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openLeaveModal()">
+                                    <i class="fa-solid fa-plus"></i> New Request
+                                </button>
+                            </div>
+                            <div class="card-body" style="padding:0;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Employee</th>
+                                            <th>Type</th>
+                                            <th>Duration</th>
+                                            <th>Days</th>
+                                            <th>Remarks</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="pendingLeavesTable"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- HR RECENTLY CREATED EMPLOYEES & LOGINS CARD -->
+                        <div class="card" id="hrRecentLoginsCard">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fa-solid fa-user-shield" style="color:var(--success);"></i>
+                                    Employee Logins &amp; Accounts Directory
+                                </div>
+                                <button class="btn btn-success" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openCreateEmpModal()">
+                                    <i class="fa-solid fa-user-plus"></i> Create Account
+                                </button>
+                            </div>
+                            <div class="card-body" style="padding:0;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Dayflow ID</th>
+                                            <th>Employee Name</th>
+                                            <th>Official Email ID</th>
+                                            <th>Department</th>
+                                            <th>Role</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="hrRecentLoginsTable"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- EMPLOYEE TIME-OFF HISTORY CARD -->
+                        <div class="card" id="empLeavesHistoryCard" style="display:none;">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fa-solid fa-calendar-check" style="color:var(--primary-light);"></i>
+                                    My Time-Off Requests &amp; Status
+                                </div>
+                                <button class="btn btn-primary" style="font-size:0.8rem;padding:0.35rem 0.75rem;" onclick="openLeaveModal()">
+                                    <i class="fa-solid fa-plus"></i> Request Time-Off
+                                </button>
+                            </div>
+                            <div class="card-body" style="padding:0;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>Leave Type</th>
+                                            <th>Dates</th>
+                                            <th>Days</th>
+                                            <th>Status</th>
+                                            <th>Manager Feedback</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="empLeavesTable"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- RIGHT COLUMN: Profile Summary & Quick Actions -->
+                    <div style="display:flex;flex-direction:column;gap:1.5rem;">
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fa-solid fa-id-card-clip" style="color:var(--accent);"></i>
+                                    Profile Summary
+                                </div>
+                            </div>
+                            <div class="card-body">
+                                <div class="info-list" id="profileSummaryList"></div>
+                            </div>
+                        </div>
+
+                        <!-- QUICK WORKSPACE SHORTCUTS -->
+                        <div class="card">
+                            <div class="card-header">
+                                <div class="card-title">
+                                    <i class="fa-solid fa-bolt" style="color:var(--warning);"></i>
+                                    Quick Actions
+                                </div>
+                            </div>
+                            <div class="card-body" style="display:flex;flex-direction:column;gap:0.6rem;">
+                                <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="toggleAttendance()">
+                                    <i class="fa-solid fa-fingerprint" style="color:var(--primary-light);"></i> Toggle Check-In / Check-Out
+                                </button>
+                                <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="openLeaveModal()">
+                                    <i class="fa-solid fa-calendar-plus" style="color:var(--accent);"></i> Submit Time-Off Request
+                                </button>
+                                <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="switchTab('profile')">
+                                    <i class="fa-solid fa-user-pen" style="color:var(--success);"></i> Update My Profile Details
+                                </button>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-title">
-                                <i class="fa-solid fa-id-card-clip" style="color:var(--accent);"></i>
-                                Profile Summary
-                            </div>
-                        </div>
-                        <div class="card-body">
-                            <div class="info-list" id="profileSummaryList"></div>
-                        </div>
-                    </div>
                 </div>
             </div>
 
             <!-- Tab: Attendance -->
             <div id="tab-attendance" class="tab-pane" style="display:none;">
-                
-                <!-- ATTENDANCE QUICK ACTION BANNER -->
                 <div class="att-banner">
                     <div style="display:flex;align-items:center;gap:1rem;">
                         <div class="brand-icon" style="width:48px;height:48px;font-size:1.4rem;">
@@ -1600,8 +1746,31 @@ def index_page():
             showToast("Copied to clipboard!");
         }
 
-        function openAuthModal() { document.getElementById('authOverlay').style.display = 'flex'; }
+        function openAuthModal() {
+            populateQuickUsers();
+            document.getElementById('authOverlay').style.display = 'flex';
+        }
         function closeAuthModal() { document.getElementById('authOverlay').style.display = 'none'; }
+
+        async function populateQuickUsers() {
+            try {
+                const res = await fetch('/api/auth/demo_users');
+                const users = await res.json();
+                const container = document.getElementById('quickUsersList');
+                const badge = document.getElementById('usersCountBadge');
+                if (badge) badge.innerText = `${users.length} accounts`;
+                if (!container) return;
+
+                container.innerHTML = users.map(u => `
+                    <button type="button" class="demo-btn" onclick="quickFill('${u.email}', '${u.password}')">
+                        <strong>${u.name}</strong>
+                        <span>${u.is_admin ? 'HR Admin' : u.role_label}</span>
+                    </button>
+                `).join('');
+            } catch (err) {
+                console.error(err);
+            }
+        }
 
         function openCreateEmpModal() {
             document.getElementById('createEmpModal').style.display = 'flex';
@@ -1616,6 +1785,7 @@ def index_page():
             document.getElementById('succEmpEmail').innerText = creds.email;
             document.getElementById('succEmpPassword').innerText = creds.password;
             document.getElementById('credentialsSuccessModal').style.display = 'flex';
+            populateQuickUsers();
         }
 
         function closeCredentialsModal() {
@@ -1845,11 +2015,11 @@ def index_page():
             document.getElementById('tab-' + tabId).style.display = 'block';
 
             document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
-            event.currentTarget.classList.add('active');
+            if (event && event.currentTarget) event.currentTarget.classList.add('active');
 
             const isAdm = appState && appState.is_admin;
             const titles = {
-                'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Workspace', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
+                'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Dashboard', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
                 'attendance': [isAdm ? 'All Staff Attendance Logs' : 'My Attendance History', 'Daily check-in logs and status classification'],
                 'leaves': ['Time-Off & Leave Management', isAdm ? 'All leave applications and company-wide requests' : 'Your submitted leave requests and balances'],
                 'employees': ['Employee Directory', 'Organization team members and login accounts'],
@@ -1876,6 +2046,7 @@ def index_page():
             const u = appState.current_user;
             const emp = appState.employee;
             const m = appState.metrics;
+            const em = appState.emp_metrics || {};
             const isAdm = appState.is_admin;
 
             document.getElementById('headerUserName').innerText = u.name;
@@ -1887,9 +2058,15 @@ def index_page():
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full organizational permissions and employee provisioning privileges.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full organizational access and employee provisioning privileges.`;
+                
+                // Show Admin metrics and tables
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
+                document.getElementById('employeeMetricsGrid').style.display = 'none';
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
+                document.getElementById('hrRecentLoginsCard').style.display = 'flex';
+                document.getElementById('empLeavesHistoryCard').style.display = 'none';
+                
                 hrHeaderBtn.style.display = 'inline-flex';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'inline-flex';
                 document.getElementById('attCardHeading').innerText = 'All Staff Attendance Logs (Organization Wide)';
@@ -1899,8 +2076,21 @@ def index_page():
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
                 rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope.`;
+                
+                // Show Employee personal metrics and tables
                 document.getElementById('adminMetricsGrid').style.display = 'none';
+                document.getElementById('employeeMetricsGrid').style.display = 'grid';
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
+                document.getElementById('hrRecentLoginsCard').style.display = 'none';
+                document.getElementById('empLeavesHistoryCard').style.display = 'flex';
+
+                // Populate Employee personal metrics
+                document.getElementById('empWorkedHoursMetric').innerText = em.worked_today || '0.0 hrs';
+                document.getElementById('empAttendanceStatusSub').innerText = `Status: ${emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}`;
+                document.getElementById('empPtoMetric').innerText = `${em.pto_balance} Days`;
+                document.getElementById('empSickMetric').innerText = `${em.sick_balance} Days`;
+                document.getElementById('empPendingLeavesMetric').innerText = em.my_pending_leaves || '0';
+
                 hrHeaderBtn.style.display = 'none';
                 if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'none';
                 document.getElementById('attCardHeading').innerText = 'My Personal Attendance Logs';
@@ -1946,6 +2136,7 @@ def index_page():
                 pendingBadge.style.display = 'none';
             }
 
+            // Pending Leaves Queue (HR)
             const ptBody = document.getElementById('pendingLeavesTable');
             if (appState.pending_leaves.length === 0) {
                 ptBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No pending leave approvals in queue! 🎉</td></tr>`;
@@ -1967,6 +2158,45 @@ def index_page():
                 `).join('');
             }
 
+            // HR Recent Logins & Accounts Table
+            const hrRecTable = document.getElementById('hrRecentLoginsTable');
+            if (hrRecTable && isAdm) {
+                hrRecTable.innerHTML = appState.all_employees.map(e => `
+                    <tr>
+                        <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
+                        <td><strong>${e.name}</strong></td>
+                        <td><span style="color:var(--text-muted);">${e.work_email}</span></td>
+                        <td>${e.department}</td>
+                        <td><span class="badge badge-info">${e.job_title}</span></td>
+                        <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
+                    </tr>
+                `).join('');
+            }
+
+            // Employee Personal Leaves Table
+            const empLeavesTable = document.getElementById('empLeavesTable');
+            if (empLeavesTable && !isAdm) {
+                if (!appState.all_leaves || appState.all_leaves.length === 0) {
+                    empLeavesTable.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">You have not submitted any time-off requests yet. Click <strong>Request Time-Off</strong> to apply!</td></tr>`;
+                } else {
+                    empLeavesTable.innerHTML = appState.all_leaves.map(l => {
+                        let badgeCls = 'badge-pending';
+                        if (l.state === 'validate') badgeCls = 'badge-approved';
+                        if (l.state === 'refuse') badgeCls = 'badge-refused';
+                        return `
+                            <tr>
+                                <td><strong>${l.type}</strong></td>
+                                <td>${l.date_from} &rarr; ${l.date_to}</td>
+                                <td><strong>${l.number_of_days} Days</strong></td>
+                                <td><span class="badge ${badgeCls}">${l.state_label}</span></td>
+                                <td><span style="color:var(--primary-light);font-size:0.82rem;">${l.manager_comment || 'Pending HR review'}</span></td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+            }
+
+            // Profile Summary Card
             const pList = document.getElementById('profileSummaryList');
             if (emp) {
                 pList.innerHTML = `
@@ -1976,6 +2206,12 @@ def index_page():
                     <div class="info-item"><span class="info-label">Official Email</span><span class="info-val">${emp.work_email}</span></div>
                     <div class="info-item"><span class="info-label">Location</span><span class="info-val">${emp.private_city}</span></div>
                     <div class="info-item"><span class="info-label">Compensation</span><span class="info-val" style="color:var(--success);">$${emp.salary_amount.toLocaleString()}.00/mo</span></div>
+                `;
+            } else {
+                pList.innerHTML = `
+                    <div class="info-item"><span class="info-label">Name</span><span class="info-val">${u.name}</span></div>
+                    <div class="info-item"><span class="info-label">Official Email</span><span class="info-val">${u.email}</span></div>
+                    <div class="info-item"><span class="info-label">Role</span><span class="info-val">${u.role_label}</span></div>
                 `;
             }
 
@@ -2107,6 +2343,7 @@ def index_page():
             fetchState();
         }
 
+        populateQuickUsers();
         fetchState();
     </script>
 </body>
@@ -2118,9 +2355,9 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
-    print("   * Attendance Logs & Status Classification (Present, Half-Day)")
-    print("   * Create New Employee & Email ID with Password Generator")
-    print("   * Employee Credential Copy Modal & Password Reset Workflow")
-    print("   * RBAC Security: HR Director (Admin) vs Internal Employee")
+    print("   * Dynamic User Discovery in Login Modal")
+    print("   * Rich Employee Dashboard with personal leave metrics & status")
+    print("   * Rich HR Admin Dashboard with organization metrics & directory")
+    print("   * Real-time Attendance Check-in & Provisioning")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
