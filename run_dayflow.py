@@ -3,13 +3,12 @@
 Dayflow HRMS - Master Administrator & Role-Based Navigation
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
 
-RBAC Navigation Rules:
-- HR Administrator (Sathiya Moorthy):
-  * Full Sidebar: Dashboard, Attendance, Time-Off & Leaves, Employee Directory, Compensation, My Profile
-- Employee (e.g. sathiya):
-  * Strictly Restricted Sidebar: ONLY Dashboard & My Profile
-  * Self-Service Profile: Edit Name, Email, Phone Number, Address, Emergency Contact
-  * Workday Check-In/Check-Out directly from Dashboard
+RBAC Rules:
+- HR Administrator (Sathiya Moorthy): Full access to Dashboard, Attendance, Leaves, Employees, Compensation, Profile
+- Employee (e.g. sathya):
+  * Strictly Restricted: ONLY Dashboard & My Profile
+  * Official Email ID is permanent and locked (Read-Only)
+  * Self-service editing of: Full Name, Phone Numbers, Residential Address/City, Emergency Contacts
 """
 
 import os
@@ -128,7 +127,6 @@ class LeaveActionPayload(BaseModel):
 
 class ProfileUpdatePayload(BaseModel):
     name: Optional[str] = None
-    email: Optional[str] = None
     work_phone: Optional[str] = None
     mobile_phone: Optional[str] = None
     private_city: Optional[str] = None
@@ -575,30 +573,13 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    old_email = user["email"]
-
-    # Update Name
+    # Update Name (Allowed)
     if payload.name and payload.name.strip():
         new_name = payload.name.strip()
         user["name"] = new_name
         emp["name"] = new_name
 
-    # Update Email
-    if payload.email and payload.email.strip():
-        new_email = payload.email.strip().lower()
-        if new_email != old_email and new_email in DB["users"]:
-            raise HTTPException(status_code=400, detail=f"Email ID '{new_email}' is already in use.")
-        if new_email != old_email:
-            user["email"] = new_email
-            user["login"] = new_email
-            emp["work_email"] = new_email
-            DB["users"][new_email] = user
-            del DB["users"][old_email]
-            # update active sessions
-            for k, v in list(DB["sessions"].items()):
-                if v == old_email:
-                    DB["sessions"][k] = new_email
-
+    # Phone, City / Address & Emergency contacts (Official email is permanent & locked)
     if payload.work_phone is not None: emp["work_phone"] = payload.work_phone
     if payload.mobile_phone is not None: emp["mobile_phone"] = payload.mobile_phone
     if payload.private_city is not None: emp["private_city"] = payload.private_city
@@ -1386,8 +1367,8 @@ def index_page():
                                     <input type="text" id="profFullName" class="form-control" placeholder="Your Name" required>
                                 </div>
                                 <div class="form-group">
-                                    <label>Official Email ID *</label>
-                                    <input type="email" id="profEmail" class="form-control" placeholder="your.name@dayflow.demo" required>
+                                    <label>Official Email ID <span style="font-size:0.72rem;color:var(--text-muted);font-weight:normal;">(🔒 Assigned by HR &bull; Permanent)</span></label>
+                                    <input type="email" id="profEmail" class="form-control" style="background:#0b1120;color:#94a3b8;cursor:not-allowed;border-color:#1e293b;" readonly>
                                 </div>
                             </div>
                             <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
@@ -1423,7 +1404,7 @@ def index_page():
                                 <input type="text" id="profEmergPhone" class="form-control" placeholder="+91 98765-XXXXX">
                             </div>
                             <button type="submit" class="btn btn-primary" style="margin-top:0.5rem;width:100%;">
-                                <i class="fa-solid fa-floppy-disk"></i> Update Profile Information
+                                <i class="fa-solid fa-floppy-disk"></i> Save Profile Details
                             </button>
                         </form>
                     </div>
@@ -1937,7 +1918,6 @@ def index_page():
             e.preventDefault();
             const payload = {
                 name: document.getElementById('profFullName').value,
-                email: document.getElementById('profEmail').value,
                 work_phone: document.getElementById('profWorkPhone').value,
                 mobile_phone: document.getElementById('profMobilePhone').value,
                 private_city: document.getElementById('profCity').value,
@@ -1952,7 +1932,7 @@ def index_page():
             });
             const data = await res.json();
             if (!res.ok) return alert(data.detail || 'Failed to update profile');
-            showToast(data.message);
+            showToast("Profile details updated successfully!");
             fetchState();
         }
 
@@ -1973,7 +1953,7 @@ def index_page():
                 'leaves': ['Time-Off & Leave Management', 'All leave applications and company-wide requests'],
                 'employees': ['Employee Directory', 'Organization team members and login accounts'],
                 'salary': ['Compensation & Banking', 'Full company salary administration'],
-                'profile': ['My Profile', 'Manage your personal details, email, and emergency contacts']
+                'profile': ['My Profile', 'Manage your personal details, phone numbers, and emergency contacts']
             };
             if (titles[tabId]) {
                 document.getElementById('pageTitle').innerHTML = `${titles[tabId][0]} ${isAdm ? '<span class="role-pill admin"><i class="fa-solid fa-shield-halved"></i> HR Admin</span>' : '<span class="role-pill employee"><i class="fa-solid fa-user"></i> Employee</span>'}`;
@@ -2148,7 +2128,7 @@ def index_page():
                 pList.innerHTML = `
                     <div class="info-item"><span class="info-label">Name</span><span class="info-val">${emp.name}</span></div>
                     <div class="info-item"><span class="info-label">Dayflow ID</span><span class="info-val" style="font-family:'JetBrains Mono';color:var(--primary-light);">${emp.dayflow_emp_id}</span></div>
-                    <div class="info-item"><span class="info-label">Official Email</span><span class="info-val">${emp.work_email}</span></div>
+                    <div class="info-item"><span class="info-label">Official Email</span><span class="info-val" style="color:#a5b4fc;">${emp.work_email}</span></div>
                     <div class="info-item"><span class="info-label">Mobile Phone</span><span class="info-val">${emp.mobile_phone || '—'}</span></div>
                     <div class="info-item"><span class="info-label">Location / Address</span><span class="info-val">${emp.private_city}</span></div>
                     <div class="info-item"><span class="info-label">Department</span><span class="info-val">${emp.department}</span></div>
@@ -2161,7 +2141,7 @@ def index_page():
                 `;
             }
 
-            // Populate Self-Service Profile Form
+            // Populate Self-Service Profile Form (Email is Locked / Read-Only)
             document.getElementById('profFullName').value = emp ? emp.name : u.name;
             document.getElementById('profEmail').value = emp ? emp.work_email : u.email;
             if (emp) {
@@ -2289,6 +2269,6 @@ if __name__ == "__main__":
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
     print("   * Employee RBAC: Restricted to Dashboard & My Profile only")
-    print("   * Self-Service Profile: Edit Name, Email, Phone, Address, Emergency Contact")
+    print("   * Official Email ID: Permanent & Read-Only for Employees")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
