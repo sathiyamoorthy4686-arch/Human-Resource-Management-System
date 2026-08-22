@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Master Administrator & Role-Based Attendance Scope
+Dayflow HRMS - Master Administrator & Strict RBAC
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
 
-Rules:
-- HR Administrator (Sathiya Moorthy):
-  * Executive management role (not tracked as an employee in attendance monitoring)
-  * Sees all organization monitoring tabs (Attendance, Leaves, Directory, Compensation)
-- Employee (e.g. sathya):
-  * Self-service portal: Dashboard (Check-In / Check-Out) & My Profile (Name, Phone, Address, Emergency Contact)
-  * Official email is locked and permanent
+Strict Access Control Rules:
+1. ONLY Sathiya Moorthy (sathiyamoorthy@dayflow.demo) is HR Admin with access to:
+   - Attendance Monitoring
+   - Time-Off & Leaves Approvals
+   - Employee Directory
+   - Compensation & Payroll
+   - Create New Employee & Email ID button
+2. ALL Employees (e.g. sathya / any created employee account):
+   - Strictly HIDDEN: Attendance, Time-Off & Leaves, Employee Directory, Compensation, Create Employee Button
+   - ONLY 2 TABS VISIBLE:
+     1. Dashboard (Workday Punch In/Out & Worked Hours)
+     2. My Profile (Personal Information & Emergency Contacts)
 """
 
 import os
@@ -94,13 +99,12 @@ class HRCreateEmployeePayload(BaseModel):
     name: str
     email: str
     password: str
-    role: str
     department: str
     job_title: str
     salary_amount: float
     salary_type: Optional[str] = "Monthly Fixed"
-    bank_name: Optional[str] = "Company Payroll Bank"
-    bank_account_no: Optional[str] = "US •••• 1000"
+    bank_name: Optional[str] = "State Bank of India"
+    bank_account_no: Optional[str] = "IN •••• 1000"
     dayflow_emp_id: Optional[str] = None
     private_city: Optional[str] = "Headquarters"
     work_phone: Optional[str] = None
@@ -144,16 +148,16 @@ class AdminSalaryUpdatePayload(BaseModel):
 
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization:
-        return DB["users"][MASTER_EMAIL]
+        raise HTTPException(status_code=401, detail="Authentication required")
     token = authorization.replace("Bearer ", "").strip()
     if token not in DB["sessions"]:
         if token in DB["users"]:
             return DB["users"][token]
-        return DB["users"][MASTER_EMAIL]
+        raise HTTPException(status_code=401, detail="Session expired. Please log in.")
     email = DB["sessions"][token]
     user = DB["users"].get(email)
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid session user")
+        raise HTTPException(status_code=401, detail="Invalid user session")
     return user
 
 # ================= PUBLIC & AUTH ENDPOINTS =================
@@ -165,9 +169,9 @@ def get_demo_users():
         {
             "name": u["name"],
             "email": u["email"],
-            "role": u["role"],
-            "role_label": u["role_label"],
-            "is_admin": u.get("is_admin", False),
+            "role": "admin" if u["email"] == MASTER_EMAIL else "employee",
+            "role_label": "HR Director / Administrator" if u["email"] == MASTER_EMAIL else "Employee (Self-Service)",
+            "is_admin": (u["email"] == MASTER_EMAIL),
             "password": u.get("password_plain", MASTER_PASS_PLAIN)
         }
         for u in DB["users"].values()
@@ -184,6 +188,7 @@ def login_user(payload: LoginPayload):
     
     token = f"sess-{uuid.uuid4().hex[:16]}"
     DB["sessions"][token] = email
+    is_master_admin = (email == MASTER_EMAIL)
     return {
         "success": True,
         "message": f"Welcome back, {user['name']}!",
@@ -192,10 +197,10 @@ def login_user(payload: LoginPayload):
             "id": user["id"],
             "name": user["name"],
             "email": user["email"],
-            "role": user["role"],
-            "role_label": user["role_label"],
-            "is_admin": user["is_admin"],
-            "is_officer": user["is_officer"],
+            "role": "admin" if is_master_admin else "employee",
+            "role_label": "HR Director / Administrator" if is_master_admin else f"Employee ({user.get('role_label', 'Self-Service')})",
+            "is_admin": is_master_admin,
+            "is_officer": is_master_admin,
             "employee_id": user["employee_id"]
         }
     }
@@ -206,8 +211,8 @@ def login_user(payload: LoginPayload):
 def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional[str] = Header(None)):
     global EMP_SEQ
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Directors / Officers can create new employee accounts.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator Sathiya Moorthy can provision employees.")
 
     email = payload.email.strip().lower()
     if email in DB["users"]:
@@ -222,9 +227,9 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     dayflow_id = payload.dayflow_emp_id.strip() if payload.dayflow_emp_id else f"DF-{EMP_SEQ}"
     EMP_SEQ += 1
 
-    is_admin_role = payload.role in ["admin", "hr_officer", "hr_manager"]
-    role_type = "admin" if is_admin_role else "employee"
-    role_label = "HR Administrator" if is_admin_role else f"Employee ({payload.job_title})"
+    # ALL provisioned accounts are strictly EMPLOYEES (NOT HR Admin)
+    role_type = "employee"
+    role_label = f"Employee ({payload.job_title})"
 
     new_user = {
         "id": user_id,
@@ -235,8 +240,8 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
         "email": email,
         "role": role_type,
         "role_label": role_label,
-        "is_admin": is_admin_role,
-        "is_officer": is_admin_role,
+        "is_admin": False,
+        "is_officer": False,
         "employee_id": emp_id_num,
         "created_at": datetime.now().isoformat()
     }
@@ -283,8 +288,8 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
 @app.post("/api/admin/delete_employee")
 def hr_delete_employee(payload: DeleteEmployeePayload, authorization: Optional[str] = Header(None)):
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can delete employee records.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can delete employee records.")
 
     emp = next((e for e in DB["employees"] if e["id"] == payload.employee_id), None)
     if not emp:
@@ -313,8 +318,8 @@ def hr_delete_employee(payload: DeleteEmployeePayload, authorization: Optional[s
 @app.post("/api/admin/delete_attendance_log")
 def hr_delete_attendance_log(payload: DeleteLogPayload, authorization: Optional[str] = Header(None)):
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can delete attendance logs.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can delete attendance logs.")
 
     initial_len = len(DB["attendance_logs"])
     DB["attendance_logs"] = [a for a in DB["attendance_logs"] if a.get("id") != payload.log_id]
@@ -327,8 +332,8 @@ def hr_delete_attendance_log(payload: DeleteLogPayload, authorization: Optional[
 @app.post("/api/admin/clear_attendance_logs")
 def hr_clear_all_attendance_logs(authorization: Optional[str] = Header(None)):
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can clear attendance logs.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can clear attendance logs.")
 
     count = len(DB["attendance_logs"])
     DB["attendance_logs"] = []
@@ -337,8 +342,8 @@ def hr_clear_all_attendance_logs(authorization: Optional[str] = Header(None)):
 @app.post("/api/admin/reset_password")
 def hr_reset_password(payload: ResetPasswordPayload, authorization: Optional[str] = Header(None)):
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can reset passwords.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can reset passwords.")
 
     email = payload.email.strip().lower()
     user = DB["users"].get(email)
@@ -359,8 +364,8 @@ def hr_reset_password(payload: ResetPasswordPayload, authorization: Optional[str
 def hr_reset_all_data(authorization: Optional[str] = Header(None)):
     global DB, EMP_SEQ
     hr_user = get_current_user(authorization)
-    if not hr_user.get("is_admin"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Administrator can wipe database.")
+    if hr_user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can wipe database.")
     
     DB = get_initial_db()
     EMP_SEQ = 1002
@@ -380,12 +385,12 @@ def logout_user(authorization: Optional[str] = Header(None)):
 def get_state(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
-    is_admin = user.get("is_admin", False) or user.get("is_officer", False)
+    is_master_admin = (user.get("email") == MASTER_EMAIL)
 
     # Actual monitored company employees (excludes Master HR Admin from employee monitoring roster)
     company_staff_emps = [e for e in DB["employees"] if e["work_email"] != MASTER_EMAIL and e["id"] != 1]
 
-    if is_admin:
+    if is_master_admin:
         # Attendance logs for company staff (excludes HR Admin)
         attendance_logs = [a for a in DB["attendance_logs"] if a.get("dayflow_emp_id") != "DF-1001" and a.get("employee_id") != 1]
         all_leaves = [l for l in DB["leaves"] if l.get("dayflow_emp_id") != "DF-1001" and l.get("employee_id") != 1]
@@ -405,20 +410,8 @@ def get_state(authorization: Optional[str] = Header(None)):
         attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == emp_id or a.get("dayflow_emp_id") == (emp["dayflow_emp_id"] if emp else "")]
         all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == emp_id]
         pending_leaves = []
-        salary_records = [emp] if emp else []
-        employees_list = [
-            {
-                "id": e["id"],
-                "name": e["name"],
-                "dayflow_emp_id": e["dayflow_emp_id"],
-                "job_title": e["job_title"],
-                "department": e["department"],
-                "work_email": e["work_email"],
-                "private_city": e["private_city"],
-                "attendance_state": e["attendance_state"]
-            }
-            for e in company_staff_emps
-        ]
+        salary_records = []
+        employees_list = []
 
     # Metrics calculate strictly on company staff
     total_emps = len(company_staff_emps)
@@ -440,18 +433,24 @@ def get_state(authorization: Optional[str] = Header(None)):
         {
             "name": u["name"],
             "email": u["email"],
-            "role": u["role"],
-            "role_label": u["role_label"],
-            "is_admin": u.get("is_admin", False),
+            "role": "admin" if u["email"] == MASTER_EMAIL else "employee",
+            "role_label": "HR Director / Administrator" if u["email"] == MASTER_EMAIL else "Employee (Self-Service)",
+            "is_admin": (u["email"] == MASTER_EMAIL),
             "password": u.get("password_plain", MASTER_PASS_PLAIN)
         }
         for u in DB["users"].values()
     ]
 
     return {
-        "current_user": user,
+        "current_user": {
+            **user,
+            "role": "admin" if is_master_admin else "employee",
+            "role_label": "HR Director / Administrator" if is_master_admin else f"Employee ({emp.get('job_title', 'Self-Service') if emp else 'Self-Service'})",
+            "is_admin": is_master_admin,
+            "is_officer": is_master_admin
+        },
         "employee": emp,
-        "is_admin": is_admin,
+        "is_admin": is_master_admin,
         "metrics": {
             "total_employees": total_emps,
             "present_today": present_emps,
@@ -549,8 +548,8 @@ def submit_leave(req: LeaveRequestPayload, authorization: Optional[str] = Header
 @app.post("/api/approve_leave")
 def approve_leave(payload: LeaveActionPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can approve leaves.")
+    if user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can approve leaves.")
     leave = next((l for l in DB["leaves"] if l["id"] == payload.leave_id), None)
     if not leave:
         raise HTTPException(status_code=404, detail="Leave record not found")
@@ -562,8 +561,8 @@ def approve_leave(payload: LeaveActionPayload, authorization: Optional[str] = He
 @app.post("/api/refuse_leave")
 def refuse_leave(payload: LeaveActionPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can refuse leaves.")
+    if user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can refuse leaves.")
     leave = next((l for l in DB["leaves"] if l["id"] == payload.leave_id), None)
     if not leave:
         raise HTTPException(status_code=404, detail="Leave record not found")
@@ -598,8 +597,8 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
 @app.post("/api/admin/update_salary")
 def update_salary(payload: AdminSalaryUpdatePayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
-    if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can update compensation.")
+    if user.get("email") != MASTER_EMAIL:
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator can update compensation.")
 
     emp = next((e for e in DB["employees"] if e["id"] == payload.employee_id), None)
     if not emp:
@@ -913,21 +912,21 @@ def index_page():
                 <span>Dashboard</span>
             </a>
 
-            <!-- HR EXCLUSIVE MANAGEMENT TABS (Hidden for regular Employees) -->
-            <a class="nav-item hr-only-tab" id="nav-attendance" onclick="switchTab('attendance')">
+            <!-- HR EXCLUSIVE MANAGEMENT TABS (Strictly hidden for all regular employees!) -->
+            <a class="nav-item hr-only-tab" id="nav-attendance" style="display:none;" onclick="switchTab('attendance')">
                 <i class="fa-solid fa-clock"></i>
                 <span>Attendance</span>
             </a>
-            <a class="nav-item hr-only-tab" id="nav-leaves" onclick="switchTab('leaves')">
+            <a class="nav-item hr-only-tab" id="nav-leaves" style="display:none;" onclick="switchTab('leaves')">
                 <i class="fa-solid fa-calendar-check"></i>
                 <span>Time-Off &amp; Leaves</span>
                 <span class="nav-badge" id="pendingBadge" style="display:none;">0</span>
             </a>
-            <a class="nav-item hr-only-tab" id="nav-employees" onclick="switchTab('employees')">
+            <a class="nav-item hr-only-tab" id="nav-employees" style="display:none;" onclick="switchTab('employees')">
                 <i class="fa-solid fa-users"></i>
                 <span>Employee Directory</span>
             </a>
-            <a class="nav-item hr-only-tab" id="nav-salary" onclick="switchTab('salary')">
+            <a class="nav-item hr-only-tab" id="nav-salary" style="display:none;" onclick="switchTab('salary')">
                 <i class="fa-solid fa-wallet"></i>
                 <span>Compensation</span>
             </a>
@@ -955,7 +954,7 @@ def index_page():
             <div class="header-title">
                 <h2 id="pageTitle">
                     Dashboard
-                    <span class="role-pill admin" id="headerRoleBadge"><i class="fa-solid fa-shield-halved"></i> HR Admin</span>
+                    <span class="role-pill employee" id="headerRoleBadge"><i class="fa-solid fa-user"></i> Employee</span>
                 </h2>
                 <p id="pageSubtitle">Every workday, perfectly aligned.</p>
             </div>
@@ -967,26 +966,26 @@ def index_page():
                 </div>
 
                 <!-- HR ONLY: CREATE EMPLOYEE BUTTON -->
-                <button class="btn btn-success" id="hrCreateEmpHeaderBtn" style="font-size:0.82rem;padding:0.45rem 0.9rem;" onclick="openCreateEmpModal()">
+                <button class="btn btn-success" id="hrCreateEmpHeaderBtn" style="font-size:0.82rem;padding:0.45rem 0.9rem;display:none;" onclick="openCreateEmpModal()">
                     <i class="fa-solid fa-user-plus"></i> Create New Employee &amp; Email ID
                 </button>
 
                 <div class="btn btn-secondary" style="padding:0.4rem 0.8rem;font-size:0.85rem;border-radius:9999px;" onclick="openAuthModal()">
                     <i class="fa-solid fa-circle-user" style="color:var(--primary-light);"></i>
-                    <span id="headerUserName">Sathiya Moorthy</span>
+                    <span id="headerUserName">Employee</span>
                 </div>
             </div>
         </header>
 
         <div class="content">
 
-            <!-- Hero Attendance Banner (Shows Punch Box for Employees; Management Info for HR) -->
+            <!-- Hero Attendance Banner (Check In / Check Out) -->
             <div class="hero-card">
                 <div class="hero-left">
-                    <h3 id="greetingText">Good day, Sathiya Moorthy!</h3>
-                    <p id="heroSubText">Track attendance and manage organization workflows seamlessly.</p>
+                    <h3 id="greetingText">Good day!</h3>
+                    <p id="heroSubText">Track attendance and manage your workday seamlessly.</p>
                 </div>
-                <!-- Employee Check-In Box -->
+                <!-- Employee Punch Box -->
                 <div class="attendance-toggle-box" id="heroAttendancePunchBox">
                     <div class="time-display">
                         <span class="label">Worked Today</span>
@@ -1008,11 +1007,11 @@ def index_page():
             <div id="tab-dashboard" class="tab-pane">
                 <div class="rbac-notice" id="rbacNoticeBar">
                     <i class="fa-solid fa-lock"></i>
-                    <span id="rbacNoticeText">RBAC Active: HR Director / Administrator.</span>
+                    <span id="rbacNoticeText">RBAC Active: Employee Self-Service Portal.</span>
                 </div>
 
-                <!-- HR ADMIN METRICS GRID (Shows stats on Company Employees) -->
-                <div class="metrics-grid" id="adminMetricsGrid">
+                <!-- HR ADMIN METRICS GRID (Only shown to Master HR Admin) -->
+                <div class="metrics-grid" id="adminMetricsGrid" style="display:none;">
                     <div class="metric-card">
                         <div class="metric-header">
                             <span class="metric-title">Staff Employees</span>
@@ -1047,8 +1046,8 @@ def index_page():
                     </div>
                 </div>
 
-                <!-- EMPLOYEE PERSONAL METRICS GRID -->
-                <div class="metrics-grid" id="employeeMetricsGrid" style="display:none;">
+                <!-- EMPLOYEE PERSONAL METRICS GRID (Shown to Employees) -->
+                <div class="metrics-grid" id="employeeMetricsGrid">
                     <div class="metric-card">
                         <div class="metric-header">
                             <span class="metric-title">Hours Worked Today</span>
@@ -1075,11 +1074,11 @@ def index_page():
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-title">My Attendance Status</span>
+                            <span class="metric-title">Today's Attendance</span>
                             <div class="metric-icon icon-purple"><i class="fa-solid fa-fingerprint"></i></div>
                         </div>
-                        <div class="metric-value" id="empTodayStatusMetric" style="font-size:1.35rem;">Present</div>
-                        <div class="metric-sub">Daily workday record</div>
+                        <div class="metric-value" id="empTodayStatusMetric" style="font-size:1.35rem;">Checked Out</div>
+                        <div class="metric-sub">Workday Punch Status</div>
                     </div>
                 </div>
 
@@ -1089,8 +1088,8 @@ def index_page():
                     <!-- LEFT COLUMN: HR Queue OR Employee Workday Summary -->
                     <div style="display:flex;flex-direction:column;gap:1.5rem;">
                         
-                        <!-- HR Pending Approvals Queue -->
-                        <div class="card" id="pendingApprovalsCard">
+                        <!-- HR Pending Approvals Queue (HR Only) -->
+                        <div class="card" id="pendingApprovalsCard" style="display:none;">
                             <div class="card-header">
                                 <div class="card-title">
                                     <i class="fa-solid fa-inbox" style="color:var(--primary-light);"></i>
@@ -1117,8 +1116,8 @@ def index_page():
                             </div>
                         </div>
 
-                        <!-- HR RECENTLY CREATED EMPLOYEES & LOGINS CARD (Shows staff only) -->
-                        <div class="card" id="hrRecentLoginsCard">
+                        <!-- HR RECENTLY CREATED EMPLOYEES & LOGINS CARD (HR Only) -->
+                        <div class="card" id="hrRecentLoginsCard" style="display:none;">
                             <div class="card-header">
                                 <div class="card-title">
                                     <i class="fa-solid fa-user-shield" style="color:var(--success);"></i>
@@ -1145,8 +1144,8 @@ def index_page():
                             </div>
                         </div>
 
-                        <!-- EMPLOYEE WORKDAY SUMMARY CARD -->
-                        <div class="card" id="empWorkdaySummaryCard" style="display:none;">
+                        <!-- EMPLOYEE WORKDAY SUMMARY CARD (Employee View) -->
+                        <div class="card" id="empWorkdaySummaryCard">
                             <div class="card-header">
                                 <div class="card-title">
                                     <i class="fa-solid fa-calendar-day" style="color:var(--primary-light);"></i>
@@ -1203,7 +1202,7 @@ def index_page():
                                 <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="switchTab('profile')">
                                     <i class="fa-solid fa-user-pen" style="color:var(--success);"></i> Update My Profile Details
                                 </button>
-                                <button class="btn btn-danger" id="hrResetDbBtn" style="justify-content:flex-start;margin-top:0.4rem;font-size:0.8rem;" onclick="handleResetAllData()">
+                                <button class="btn btn-danger" id="hrResetDbBtn" style="justify-content:flex-start;margin-top:0.4rem;font-size:0.8rem;display:none;" onclick="handleResetAllData()">
                                     <i class="fa-solid fa-trash-can"></i> Reset Database (Clear Test Data)
                                 </button>
                             </div>
@@ -1213,7 +1212,7 @@ def index_page():
                 </div>
             </div>
 
-            <!-- Tab: Attendance (HR Only - Monitors Company Staff) -->
+            <!-- Tab: Attendance (HR Only - Monitored Staff Only) -->
             <div id="tab-attendance" class="tab-pane" style="display:none;">
                 <div class="card">
                     <div class="card-header">
@@ -1465,18 +1464,9 @@ def index_page():
                         </div>
                     </div>
 
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
-                        <div class="form-group">
-                            <label>Security Role *</label>
-                            <select id="newEmpRole" class="form-control">
-                                <option value="employee">Employee (Self-Service)</option>
-                                <option value="hr_officer">HR Director / Administrator</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Monthly Salary ($)</label>
-                            <input type="number" id="newEmpSalary" class="form-control" value="7500" min="1000" step="100">
-                        </div>
+                    <div class="form-group">
+                        <label>Monthly Salary ($)</label>
+                        <input type="number" id="newEmpSalary" class="form-control" value="7500" min="1000" step="100">
                     </div>
 
                     <div class="modal-footer" style="padding-right:0;padding-left:0;border:none;margin-top:1rem;">
@@ -1581,7 +1571,7 @@ def index_page():
     <div id="toast"><i class="fa-solid fa-circle-check"></i> <span id="toastMsg">Action completed</span></div>
 
     <script>
-        let sessionToken = localStorage.getItem('dayflow_token') || 'session-master-hr-token';
+        let sessionToken = localStorage.getItem('dayflow_token') || '';
         let appState = null;
         let activeTab = 'dashboard';
         let lastCreatedCredentials = null;
@@ -1617,7 +1607,7 @@ def index_page():
                 container.innerHTML = users.map(u => `
                     <button type="button" class="demo-btn" onclick="quickFill('${u.email}', '${u.password}')">
                         <strong>${u.name}</strong>
-                        <span>${u.is_admin ? 'HR Admin' : u.role_label}</span>
+                        <span>${u.is_admin ? 'HR Admin' : 'Employee'}</span>
                     </button>
                 `).join('');
             } catch (err) {
@@ -1714,7 +1704,6 @@ def index_page():
                 name: document.getElementById('newEmpName').value,
                 email: document.getElementById('newEmpEmail').value,
                 password: document.getElementById('newEmpPassword').value,
-                role: document.getElementById('newEmpRole').value,
                 department: document.getElementById('newEmpDept').value,
                 job_title: document.getElementById('newEmpJobTitle').value,
                 salary_amount: parseFloat(document.getElementById('newEmpSalary').value) || 7500.0
@@ -1821,10 +1810,12 @@ def index_page():
         }
 
         async function handleLogout() {
-            await fetch('/api/auth/logout', {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${sessionToken}` }
-            });
+            if (sessionToken) {
+                await fetch('/api/auth/logout', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${sessionToken}` }
+                });
+            }
             localStorage.removeItem('dayflow_token');
             sessionToken = '';
             showToast('Logged out successfully.');
@@ -1833,6 +1824,10 @@ def index_page():
 
         async function fetchState() {
             try {
+                if (!sessionToken) {
+                    openAuthModal();
+                    return;
+                }
                 const res = await fetch('/api/state', {
                     headers: { 'Authorization': `Bearer ${sessionToken}` }
                 });
@@ -1845,6 +1840,7 @@ def index_page():
                 render();
             } catch (err) {
                 console.error(err);
+                openAuthModal();
             }
         }
 
@@ -1939,7 +1935,7 @@ def index_page():
             const activeNav = document.getElementById('nav-' + tabId);
             if (activeNav) activeNav.classList.add('active');
 
-            const isAdm = appState && appState.is_admin;
+            const isAdm = appState && appState.is_admin && (appState.current_user.email === 'sathiyamoorthy@dayflow.demo');
             const titles = {
                 'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Dashboard', isAdm ? 'Company staff overview and approval queue' : 'Your personal workday schedule & attendance'],
                 'attendance': ['Staff Attendance Monitoring', 'Live check-in logs and status classification for company employees'],
@@ -1969,7 +1965,9 @@ def index_page():
             const emp = appState.employee;
             const m = appState.metrics;
             const em = appState.emp_metrics || {};
-            const isAdm = appState.is_admin;
+            
+            // STRICT MASTER ADMIN CHECK: ONLY Sathiya Moorthy (sathiyamoorthy@dayflow.demo) is HR Admin
+            const isMasterAdmin = (u.email === 'sathiyamoorthy@dayflow.demo');
 
             document.getElementById('headerUserName').innerText = u.name;
             const roleBadge = document.getElementById('headerRoleBadge');
@@ -1980,9 +1978,9 @@ def index_page():
             const hrExecHeroBadge = document.getElementById('hrExecutiveHeroBadge');
             const quickToggleAttBtn = document.getElementById('quickToggleAttBtn');
 
-            // HIDE/SHOW SIDEBAR TABS BY ROLE (CRITICAL RBAC RULE!)
+            // CRITICAL: HIDE THE 4 MANAGEMENT TABS FOR ALL EMPLOYEES!
             const hrTabs = document.querySelectorAll('.hr-only-tab');
-            if (isAdm) {
+            if (isMasterAdmin) {
                 hrTabs.forEach(el => el.style.display = 'flex');
             } else {
                 hrTabs.forEach(el => el.style.display = 'none');
@@ -1991,10 +1989,10 @@ def index_page():
                 }
             }
 
-            if (isAdm) {
+            if (isMasterAdmin) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator (${u.name}).</strong> Master management account.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: Master HR Administrator (${u.name}).</strong> Full system &amp; employee provisioning control.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('employeeMetricsGrid').style.display = 'none';
@@ -2014,7 +2012,7 @@ def index_page():
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
-                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.name : u.name} - ${emp ? emp.job_title : 'Team Member'}).</strong> Self-service portal.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.name : u.name} - ${emp ? emp.job_title : 'Staff'}).</strong> Self-service portal.`;
                 
                 document.getElementById('adminMetricsGrid').style.display = 'none';
                 document.getElementById('employeeMetricsGrid').style.display = 'grid';
@@ -2026,7 +2024,7 @@ def index_page():
                 document.getElementById('empAttendanceStatusSub').innerText = `Status: ${emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}`;
                 document.getElementById('empPtoMetric').innerText = `${em.pto_balance} Days`;
                 document.getElementById('empSickMetric').innerText = `${em.sick_balance} Days`;
-                document.getElementById('empTodayStatusMetric').innerText = emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Present';
+                document.getElementById('empTodayStatusMetric').innerText = emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out';
 
                 hrHeaderBtn.style.display = 'none';
                 if (hrResetDbBtn) hrResetDbBtn.style.display = 'none';
@@ -2064,7 +2062,7 @@ def index_page():
             document.getElementById('mAbsent').innerText = m.absent_today;
 
             const pendingBadge = document.getElementById('pendingBadge');
-            if (isAdm && appState.pending_leaves.length > 0) {
+            if (isMasterAdmin && appState.pending_leaves.length > 0) {
                 pendingBadge.style.display = 'inline-block';
                 pendingBadge.innerText = appState.pending_leaves.length;
             } else {
@@ -2095,7 +2093,7 @@ def index_page():
 
             // HR Recent Logins & Accounts Table (Lists Staff Employees Only)
             const hrRecTable = document.getElementById('hrRecentLoginsTable');
-            if (hrRecTable && isAdm) {
+            if (hrRecTable && isMasterAdmin) {
                 if (appState.all_employees.length === 0) {
                     hrRecTable.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No employees created yet. Click <strong>Create Account</strong> to provision employees!</td></tr>`;
                 } else {
@@ -2114,7 +2112,7 @@ def index_page():
 
             // Employee Workday Summary Table (In Dashboard)
             const empAttSummaryTable = document.getElementById('empAttendanceSummaryTable');
-            if (empAttSummaryTable && !isAdm) {
+            if (empAttSummaryTable && !isMasterAdmin) {
                 if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
                     empAttSummaryTable.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:2rem;color:var(--text-muted);">No check-in logs for today yet. Use the <strong>Check In</strong> button above!</td></tr>`;
                 } else {
@@ -2163,7 +2161,7 @@ def index_page():
 
             // Attendance Logs Table (HR Tab - Monitored Staff Only)
             const attTable = document.getElementById('attendanceLogsTable');
-            if (attTable && isAdm) {
+            if (attTable && isMasterAdmin) {
                 if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
                     attTable.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:3rem 1.5rem;color:var(--text-muted);">No employee attendance records found.</td></tr>`;
                 } else {
@@ -2195,7 +2193,7 @@ def index_page():
 
             // Employee Directory Table (HR Tab - Monitored Staff Only)
             const empsTable = document.getElementById('employeesTable');
-            if (empsTable && isAdm) {
+            if (empsTable && isMasterAdmin) {
                 if (appState.all_employees.length === 0) {
                     empsTable.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:2.5rem;color:var(--text-muted);">No employees registered yet. Click <strong>Create New Employee &amp; Email ID</strong> above to add staff!</td></tr>`;
                 } else {
@@ -2225,7 +2223,7 @@ def index_page():
 
             // Salary Table (HR Tab - Monitored Staff Only)
             const salTable = document.getElementById('salaryTable');
-            if (salTable && isAdm) {
+            if (salTable && isMasterAdmin) {
                 if (appState.salary_records.length === 0) {
                     salTable.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2.5rem;color:var(--text-muted);">No employee payroll records found.</td></tr>`;
                 } else {
@@ -2282,8 +2280,7 @@ if __name__ == "__main__":
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
-    print("   * Excluded HR Admin from Company Employee Attendance Monitoring Roster")
     print("   * Employee RBAC: Restricted to Dashboard & My Profile only")
-    print("   * Official Email ID: Permanent & Read-Only")
+    print("   * Removed Attendance, Leaves, Directory, Compensation for Employees")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
