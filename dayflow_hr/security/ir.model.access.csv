@@ -1,0 +1,9 @@
+﻿id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_dayflow_hr_employee_user,hr.employee.user,hr.model_hr_employee,base.group_user,1,1,0,0
+access_dayflow_hr_employee_officer,hr.employee.officer,hr.model_hr_employee,hr.group_hr_user,1,1,1,1
+access_dayflow_hr_attendance_user,hr.attendance.user,hr_attendance.model_hr_attendance,base.group_user,1,1,1,0
+access_dayflow_hr_attendance_officer,hr.attendance.officer,hr_attendance.model_hr_attendance,hr.group_hr_user,1,1,1,1
+access_dayflow_hr_leave_user,hr.leave.user,hr_holidays.model_hr_leave,base.group_user,1,1,1,0
+access_dayflow_hr_leave_officer,hr.leave.officer,hr_holidays.model_hr_leave,hr.group_hr_user,1,1,1,1
+access_dayflow_hr_leave_type_user,hr.leave.type.user,hr_holidays.model_hr_leave_type,base.group_user,1,0,0,0
+access_dayflow_hr_leave_type_officer,hr.leave.type.officer,hr_holidays.model_hr_leave_type,hr.group_hr_user,1,1,1,1

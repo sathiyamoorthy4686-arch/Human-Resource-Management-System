@@ -1,0 +1,179 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Departments -->
+        <record id="dep_dayflow_hr" model="hr.department">
+            <field name="name">Human Resources</field>
+        </record>
+        <record id="dep_dayflow_eng" model="hr.department">
+            <field name="name">Engineering</field>
+        </record>
+        <record id="dep_dayflow_mkt" model="hr.department">
+            <field name="name">Marketing &amp; Growth</field>
+        </record>
+        <record id="dep_dayflow_ops" model="hr.department">
+            <field name="name">Operations</field>
+        </record>
+
+        <!-- Users -->
+        <!-- 1. HR Officer / Admin User: Alex Morgan -->
+        <record id="user_alex_morgan" model="res.users">
+            <field name="name">Alex Morgan</field>
+            <field name="login">alex.morgan@dayflow.demo</field>
+            <field name="email">alex.morgan@dayflow.demo</field>
+            <field name="groups_id" eval="[(6, 0, [ref('base.group_user'), ref('hr.group_hr_user'), ref('hr.group_hr_manager')])]"/>
+        </record>
+
+        <!-- 2. Employee User: Jordan Smith -->
+        <record id="user_jordan_smith" model="res.users">
+            <field name="name">Jordan Smith</field>
+            <field name="login">jordan.smith@dayflow.demo</field>
+            <field name="email">jordan.smith@dayflow.demo</field>
+            <field name="groups_id" eval="[(6, 0, [ref('base.group_user')])]"/>
+        </record>
+
+        <!-- 3. Employee User: Taylor Reed -->
+        <record id="user_taylor_reed" model="res.users">
+            <field name="name">Taylor Reed</field>
+            <field name="login">taylor.reed@dayflow.demo</field>
+            <field name="email">taylor.reed@dayflow.demo</field>
+            <field name="groups_id" eval="[(6, 0, [ref('base.group_user')])]"/>
+        </record>
+
+        <!-- 4. Employee User: Casey Patel -->
+        <record id="user_casey_patel" model="res.users">
+            <field name="name">Casey Patel</field>
+            <field name="login">casey.patel@dayflow.demo</field>
+            <field name="email">casey.patel@dayflow.demo</field>
+            <field name="groups_id" eval="[(6, 0, [ref('base.group_user')])]"/>
+        </record>
+
+        <!-- Employee Profiles -->
+        <record id="emp_alex_morgan" model="hr.employee">
+            <field name="name">Alex Morgan</field>
+            <field name="user_id" ref="user_alex_morgan"/>
+            <field name="dayflow_emp_id">DF-1001</field>
+            <field name="job_title">HR Director &amp; People Lead</field>
+            <field name="department_id" ref="dep_dayflow_hr"/>
+            <field name="work_email">alex.morgan@dayflow.demo</field>
+            <field name="work_phone">+1 555-0101</field>
+            <field name="mobile_phone">+1 555-0102</field>
+            <field name="private_city">San Francisco</field>
+            <field name="salary_amount">8500.00</field>
+            <field name="salary_type">monthly</field>
+            <field name="bank_name">First Republic Bank</field>
+            <field name="bank_account_no">US89370400440532013000</field>
+            <field name="emergency_contact_name">Sarah Morgan</field>
+            <field name="emergency_contact_relation">Spouse</field>
+            <field name="emergency_contact_phone">+1 555-0109</field>
+        </record>
+
+        <record id="emp_jordan_smith" model="hr.employee">
+            <field name="name">Jordan Smith</field>
+            <field name="user_id" ref="user_jordan_smith"/>
+            <field name="dayflow_emp_id">DF-1002</field>
+            <field name="job_title">Senior Full Stack Engineer</field>
+            <field name="department_id" ref="dep_dayflow_eng"/>
+            <field name="parent_id" ref="emp_alex_morgan"/>
+            <field name="work_email">jordan.smith@dayflow.demo</field>
+            <field name="work_phone">+1 555-0201</field>
+            <field name="mobile_phone">+1 555-0202</field>
+            <field name="private_city">Austin</field>
+            <field name="salary_amount">9200.00</field>
+            <field name="salary_type">monthly</field>
+            <field name="bank_name">Silicon Valley Bank</field>
+            <field name="bank_account_no">US44200000000000000002</field>
+            <field name="emergency_contact_name">David Smith</field>
+            <field name="emergency_contact_relation">Parent</field>
+            <field name="emergency_contact_phone">+1 555-0209</field>
+        </record>
+
+        <record id="emp_taylor_reed" model="hr.employee">
+            <field name="name">Taylor Reed</field>
+            <field name="user_id" ref="user_taylor_reed"/>
+            <field name="dayflow_emp_id">DF-1003</field>
+            <field name="job_title">Growth Marketing Manager</field>
+            <field name="department_id" ref="dep_dayflow_mkt"/>
+            <field name="parent_id" ref="emp_alex_morgan"/>
+            <field name="work_email">taylor.reed@dayflow.demo</field>
+            <field name="work_phone">+1 555-0301</field>
+            <field name="mobile_phone">+1 555-0302</field>
+            <field name="private_city">New York</field>
+            <field name="salary_amount">6800.00</field>
+            <field name="salary_type">monthly</field>
+            <field name="bank_name">Chase Bank</field>
+            <field name="bank_account_no">US12200000000000000003</field>
+            <field name="emergency_contact_name">Elena Reed</field>
+            <field name="emergency_contact_relation">Sibling</field>
+            <field name="emergency_contact_phone">+1 555-0309</field>
+        </record>
+
+        <record id="emp_casey_patel" model="hr.employee">
+            <field name="name">Casey Patel</field>
+            <field name="user_id" ref="user_casey_patel"/>
+            <field name="dayflow_emp_id">DF-1004</field>
+            <field name="job_title">Operations &amp; Logistics Lead</field>
+            <field name="department_id" ref="dep_dayflow_ops"/>
+            <field name="parent_id" ref="emp_alex_morgan"/>
+            <field name="work_email">casey.patel@dayflow.demo</field>
+            <field name="work_phone">+1 555-0401</field>
+            <field name="mobile_phone">+1 555-0402</field>
+            <field name="private_city">Seattle</field>
+            <field name="salary_amount">6200.00</field>
+            <field name="salary_type">monthly</field>
+            <field name="bank_name">Bank of America</field>
+            <field name="bank_account_no">US33200000000000000004</field>
+            <field name="emergency_contact_name">Aarav Patel</field>
+            <field name="emergency_contact_relation">Spouse</field>
+            <field name="emergency_contact_phone">+1 555-0409</field>
+        </record>
+
+        <!-- Sample Attendance Logs -->
+        <record id="att_jordan_1" model="hr.attendance">
+            <field name="employee_id" ref="emp_jordan_smith"/>
+            <field name="check_in" eval="(datetime.now() - timedelta(days=2, hours=8)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="check_out" eval="(datetime.now() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        </record>
+
+        <record id="att_taylor_1" model="hr.attendance">
+            <field name="employee_id" ref="emp_taylor_reed"/>
+            <field name="check_in" eval="(datetime.now() - timedelta(days=1, hours=8)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="check_out" eval="(datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        </record>
+
+        <record id="att_casey_1" model="hr.attendance">
+            <field name="employee_id" ref="emp_casey_patel"/>
+            <field name="check_in" eval="(datetime.now() - timedelta(hours=3)).strftime('%Y-%m-%d %H:%M:%S')"/>
+        </record>
+
+        <!-- Sample Leave Requests -->
+        <!-- 1. Pending Paid Time Off request by Jordan Smith -->
+        <record id="leave_jordan_pending" model="hr.leave">
+            <field name="employee_id" ref="emp_jordan_smith"/>
+            <field name="holiday_status_id" ref="holiday_status_paid"/>
+            <field name="request_date_from" eval="(datetime.now() + timedelta(days=5)).strftime('%Y-%m-%d')"/>
+            <field name="request_date_to" eval="(datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d')"/>
+            <field name="date_from" eval="(datetime.now() + timedelta(days=5, hours=9)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="date_to" eval="(datetime.now() + timedelta(days=7, hours=18)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="number_of_days">3</field>
+            <field name="name">Family Vacation &amp; Personal Travel</field>
+            <field name="remarks">Annual family reunion trip. All tasks handed over to Taylor.</field>
+            <field name="state">confirm</field>
+        </record>
+
+        <!-- 2. Approved Sick Leave for Taylor Reed -->
+        <record id="leave_taylor_approved" model="hr.leave">
+            <field name="employee_id" ref="emp_taylor_reed"/>
+            <field name="holiday_status_id" ref="holiday_status_sick"/>
+            <field name="request_date_from" eval="(datetime.now() - timedelta(days=4)).strftime('%Y-%m-%d')"/>
+            <field name="request_date_to" eval="(datetime.now() - timedelta(days=3)).strftime('%Y-%m-%d')"/>
+            <field name="date_from" eval="(datetime.now() - timedelta(days=4, hours=9)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="date_to" eval="(datetime.now() - timedelta(days=3, hours=18)).strftime('%Y-%m-%d %H:%M:%S')"/>
+            <field name="number_of_days">2</field>
+            <field name="name">Doctor Appointment and Recovery</field>
+            <field name="remarks">Seasonal flu and dental checkup.</field>
+            <field name="manager_comment">Approved. Take good care and recover well!</field>
+            <field name="state">validate</field>
+        </record>
+    </data>
+</odoo>

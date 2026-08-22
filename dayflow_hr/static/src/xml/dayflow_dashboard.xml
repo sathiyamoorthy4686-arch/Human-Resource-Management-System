@@ -1,0 +1,360 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<templates xml:space="preserve">
+
+<t t-name="dayflow_hr.Dashboard">
+    <div class="dayflow-dashboard-container">
+        <!-- Top Hero Header -->
+        <div class="dayflow-header-card shadow-sm">
+            <div class="d-flex flex-wrap align-items-center justify-content-between gap-3">
+                <div class="d-flex align-items-center gap-3">
+                    <img t-att-src="state.user.avatar_url" class="dayflow-avatar shadow-sm" alt="User Avatar"/>
+                    <div>
+                        <div class="d-flex align-items-center gap-2">
+                            <h2 class="mb-0 fw-bold text-dark"><t t-esc="state.user.name"/></h2>
+                            <span class="badge rounded-pill bg-primary-subtle text-primary border border-primary-subtle px-3 py-1 fw-semibold">
+                                <t t-esc="state.user.dayflow_emp_id"/>
+                            </span>
+                            <span class="badge rounded-pill bg-dark-subtle text-dark border px-2 py-1">
+                                <t t-esc="state.user.role_label"/>
+                            </span>
+                        </div>
+                        <p class="text-muted mb-0 mt-1 fst-italic">"Every workday, perfectly aligned."</p>
+                    </div>
+                </div>
+
+                <!-- Live Clock and Quick Attendance Action -->
+                <div class="d-flex align-items-center gap-3 bg-white p-3 rounded-4 border shadow-sm">
+                    <div class="text-end pe-3 border-end">
+                        <div class="fw-bold text-primary fs-5 font-monospace"><t t-esc="state.liveTime"/></div>
+                        <small class="text-muted"><t t-esc="state.liveDate"/></small>
+                    </div>
+                    <div>
+                        <button t-if="!state.attendance.is_checked_in" 
+                                class="btn btn-success btn-lg px-4 d-flex align-items-center gap-2 fw-semibold rounded-3 shadow-sm"
+                                t-on-click="toggleAttendance">
+                            <i class="fa fa-sign-in fa-lg"/> Check In
+                        </button>
+                        <button t-if="state.attendance.is_checked_in" 
+                                class="btn btn-danger btn-lg px-4 d-flex align-items-center gap-2 fw-semibold rounded-3 shadow-sm"
+                                t-on-click="toggleAttendance">
+                            <i class="fa fa-sign-out fa-lg"/> Check Out
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- HR Admin / Officer Dashboard View -->
+        <t t-if="state.user.is_officer">
+            <!-- KPI Metrics -->
+            <div class="row g-3 mt-1">
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="card dayflow-kpi-card shadow-sm border-0 bg-primary text-white" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_all_employees')">
+                        <div class="card-body p-4 d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="text-white-50 text-uppercase fw-semibold mb-1">Total Employees</h6>
+                                <h2 class="fw-bold mb-0"><t t-esc="state.admin.total_employees"/></h2>
+                            </div>
+                            <div class="kpi-icon-circle bg-white text-primary">
+                                <i class="fa fa-users fa-2x"/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="card dayflow-kpi-card shadow-sm border-0 bg-success text-white" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_attendance_mgmt')">
+                        <div class="card-body p-4 d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="text-white-50 text-uppercase fw-semibold mb-1">On-Duty / Present</h6>
+                                <h2 class="fw-bold mb-0"><t t-esc="state.admin.present_today"/></h2>
+                            </div>
+                            <div class="kpi-icon-circle bg-white text-success">
+                                <i class="fa fa-check-circle fa-2x"/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="card dayflow-kpi-card shadow-sm border-0 bg-warning text-dark" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_timeoff_mgmt')">
+                        <div class="card-body p-4 d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="text-black-50 text-uppercase fw-semibold mb-1">Pending Approvals</h6>
+                                <h2 class="fw-bold mb-0"><t t-esc="state.admin.pending_count"/></h2>
+                            </div>
+                            <div class="kpi-icon-circle bg-white text-warning">
+                                <i class="fa fa-clock-o fa-2x"/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-xl-3">
+                    <div class="card dayflow-kpi-card shadow-sm border-0 bg-info text-white" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_timeoff_mgmt')">
+                        <div class="card-body p-4 d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="text-white-50 text-uppercase fw-semibold mb-1">On Leave Today</h6>
+                                <h2 class="fw-bold mb-0"><t t-esc="state.admin.on_leave_today"/></h2>
+                            </div>
+                            <div class="kpi-icon-circle bg-white text-info">
+                                <i class="fa fa-plane fa-2x"/>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Pending Approvals & Employee Directory Row -->
+            <div class="row g-4 mt-1">
+                <!-- Pending Approvals Section -->
+                <div class="col-12 col-lg-7">
+                    <div class="card shadow-sm border-0 rounded-4 h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0 fw-bold text-dark d-flex align-items-center gap-2">
+                                <i class="fa fa-bell text-warning"/> Pending Leave Approvals
+                            </h5>
+                            <button class="btn btn-sm btn-outline-primary" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_timeoff_mgmt')">
+                                View All Requests
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <t t-if="state.admin.pending_leaves and state.admin.pending_leaves.length > 0">
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Employee</th>
+                                                <th>Type</th>
+                                                <th>Duration</th>
+                                                <th>Remarks</th>
+                                                <th class="text-end pe-3">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr t-foreach="state.admin.pending_leaves" t-as="req" t-key="req.id">
+                                                <td>
+                                                    <div class="d-flex align-items-center gap-2">
+                                                        <img t-att-src="req.employee_avatar" class="rounded-circle" width="36" height="36" alt=""/>
+                                                        <div>
+                                                            <div class="fw-semibold text-dark"><t t-esc="req.employee_name"/></div>
+                                                            <small class="text-muted"><t t-esc="req.department"/></small>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <span class="badge rounded-pill bg-primary-subtle text-primary border">
+                                                        <t t-esc="req.leave_type"/>
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <div class="fw-semibold"><t t-esc="req.days"/> Days</div>
+                                                    <small class="text-muted"><t t-esc="req.date_from"/> - <t t-esc="req.date_to"/></small>
+                                                </td>
+                                                <td>
+                                                    <small class="text-secondary text-truncate d-inline-block" style="max-width: 150px;" t-att-title="req.remarks">
+                                                        <t t-esc="req.remarks"/>
+                                                    </small>
+                                                </td>
+                                                <td class="text-end pe-3">
+                                                    <button class="btn btn-sm btn-success me-1 px-2" t-on-click="() => this.approveLeave(req.id)" title="Approve Request">
+                                                        <i class="fa fa-check"/>
+                                                    </button>
+                                                    <button class="btn btn-sm btn-outline-danger px-2" t-on-click="() => this.refuseLeave(req.id)" title="Reject Request">
+                                                        <i class="fa fa-times"/>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div class="text-center py-5 text-muted">
+                                    <i class="fa fa-check-circle-o fa-3x text-success mb-2"/>
+                                    <h6>All leave requests are reviewed and up to date!</h6>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Real-time Team Work Status Section -->
+                <div class="col-12 col-lg-5">
+                    <div class="card shadow-sm border-0 rounded-4 h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0 fw-bold text-dark d-flex align-items-center gap-2">
+                                <i class="fa fa-id-badge text-primary"/> Team Status
+                            </h5>
+                            <button class="btn btn-sm btn-outline-primary" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_all_employees')">
+                                Directory
+                            </button>
+                        </div>
+                        <div class="card-body p-3">
+                            <div class="d-flex flex-column gap-2" style="max-height: 380px; overflow-y: auto;">
+                                <div t-foreach="state.admin.employees" t-as="emp" t-key="emp.id" 
+                                     class="d-flex align-items-center justify-content-between p-2 rounded-3 border bg-light-subtle hover-shadow"
+                                     style="cursor: pointer;"
+                                     t-on-click="() => this.openEmployeeRecord(emp.id)">
+                                    <div class="d-flex align-items-center gap-2">
+                                        <img t-att-src="emp.avatar" class="rounded-circle border" width="38" height="38" alt=""/>
+                                        <div>
+                                            <div class="fw-semibold text-dark"><t t-esc="emp.name"/></div>
+                                            <small class="text-muted"><t t-esc="emp.emp_id"/> • <t t-esc="emp.job_title"/></small>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <span t-if="emp.status == 'present'" class="badge rounded-pill bg-success-subtle text-success border border-success-subtle px-2 py-1">Present</span>
+                                        <span t-if="emp.status == 'half_day'" class="badge rounded-pill bg-warning-subtle text-warning border border-warning-subtle px-2 py-1">Half-day</span>
+                                        <span t-if="emp.status == 'on_leave'" class="badge rounded-pill bg-info-subtle text-info border border-info-subtle px-2 py-1">On Leave</span>
+                                        <span t-if="emp.status == 'absent'" class="badge rounded-pill bg-secondary-subtle text-secondary border px-2 py-1">Absent</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </t>
+
+        <!-- Employee Self-Service Dashboard View -->
+        <t t-else="">
+            <!-- Quick Action Cards Grid -->
+            <div class="row g-3 mt-1">
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="card dayflow-action-card shadow-sm border-0 text-center p-3 rounded-4" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_my_profile')">
+                        <div class="action-icon-wrapper bg-primary-subtle text-primary mx-auto mb-3">
+                            <i class="fa fa-user-circle fa-2x"/>
+                        </div>
+                        <h5 class="fw-bold text-dark mb-1">My Profile</h5>
+                        <p class="text-muted small mb-0">View contact, job, and personal details</p>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="card dayflow-action-card shadow-sm border-0 text-center p-3 rounded-4" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_my_attendance')">
+                        <div class="action-icon-wrapper bg-success-subtle text-success mx-auto mb-3">
+                            <i class="fa fa-clock-o fa-2x"/>
+                        </div>
+                        <h5 class="fw-bold text-dark mb-1">My Attendance</h5>
+                        <p class="text-muted small mb-0">Today: <span class="fw-semibold text-success"><t t-esc="state.attendance.worked_hours"/> hrs</span></p>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="card dayflow-action-card shadow-sm border-0 text-center p-3 rounded-4" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_my_leaves')">
+                        <div class="action-icon-wrapper bg-warning-subtle text-warning mx-auto mb-3">
+                            <i class="fa fa-calendar-check-o fa-2x"/>
+                        </div>
+                        <h5 class="fw-bold text-dark mb-1">Apply Leave</h5>
+                        <p class="text-muted small mb-0">Paid, Sick, &amp; Unpaid Time Off</p>
+                    </div>
+                </div>
+
+                <div class="col-12 col-sm-6 col-lg-3">
+                    <div class="card dayflow-action-card shadow-sm border-0 text-center p-3 rounded-4" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_my_profile')">
+                        <div class="action-icon-wrapper bg-info-subtle text-info mx-auto mb-3">
+                            <i class="fa fa-money fa-2x"/>
+                        </div>
+                        <h5 class="fw-bold text-dark mb-1">Salary &amp; Pay</h5>
+                        <p class="text-muted small mb-0">
+                            <t t-if="state.salary.salary_amount">
+                                <t t-esc="state.salary.currency_symbol"/><t t-esc="state.salary.salary_amount"/> / mo
+                            </t>
+                            <t t-else="">Structure Configured</t>
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Bottom Row: Recent Leave Requests & Activity Feed -->
+            <div class="row g-4 mt-1">
+                <div class="col-12 col-lg-8">
+                    <div class="card shadow-sm border-0 rounded-4 h-100">
+                        <div class="card-header bg-white border-bottom py-3 d-flex justify-content-between align-items-center">
+                            <h5 class="mb-0 fw-bold text-dark d-flex align-items-center gap-2">
+                                <i class="fa fa-calendar text-primary"/> Recent Time Off Requests
+                            </h5>
+                            <button class="btn btn-sm btn-primary" t-on-click="() => this.openAction('dayflow_hr.action_dayflow_my_leaves')">
+                                + New Request
+                            </button>
+                        </div>
+                        <div class="card-body p-0">
+                            <t t-if="state.recent_leaves and state.recent_leaves.length > 0">
+                                <div class="table-responsive">
+                                    <table class="table table-hover align-middle mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>Leave Type</th>
+                                                <th>Dates</th>
+                                                <th>Days</th>
+                                                <th>Status</th>
+                                                <th>Feedback / Remarks</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr t-foreach="state.recent_leaves" t-as="l" t-key="l.id">
+                                                <td>
+                                                    <span class="badge rounded-pill bg-light text-dark border">
+                                                        <t t-esc="l.type"/>
+                                                    </span>
+                                                </td>
+                                                <td>
+                                                    <span class="fw-semibold"><t t-esc="l.date_from"/></span> to <span class="fw-semibold"><t t-esc="l.date_to"/></span>
+                                                </td>
+                                                <td><t t-esc="l.number_of_days"/> Days</td>
+                                                <td>
+                                                    <span t-if="l.state == 'validate'" class="badge rounded-pill bg-success-subtle text-success border border-success-subtle">Approved</span>
+                                                    <span t-if="l.state == 'confirm'" class="badge rounded-pill bg-warning-subtle text-warning border border-warning-subtle">Pending</span>
+                                                    <span t-if="l.state == 'refuse'" class="badge rounded-pill bg-danger-subtle text-danger border border-danger-subtle">Rejected</span>
+                                                    <span t-if="l.state == 'draft'" class="badge rounded-pill bg-secondary-subtle text-secondary border">Draft</span>
+                                                </td>
+                                                <td>
+                                                    <div t-if="l.manager_comment" class="text-success small fw-semibold">
+                                                        <i class="fa fa-commenting-o"/> <t t-esc="l.manager_comment"/>
+                                                    </div>
+                                                    <div t-else="" class="text-muted small">
+                                                        <t t-esc="l.remarks || 'No notes'"/>
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </t>
+                            <t t-else="">
+                                <div class="text-center py-5 text-muted">
+                                    <i class="fa fa-calendar-o fa-3x mb-2 text-primary-subtle"/>
+                                    <h6>No recent time-off requests found.</h6>
+                                </div>
+                            </t>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 col-lg-4">
+                    <div class="card shadow-sm border-0 rounded-4 h-100">
+                        <div class="card-header bg-white border-bottom py-3">
+                            <h5 class="mb-0 fw-bold text-dark d-flex align-items-center gap-2">
+                                <i class="fa fa-bullhorn text-info"/> Announcements &amp; Alerts
+                            </h5>
+                        </div>
+                        <div class="card-body p-3">
+                            <div class="d-flex flex-column gap-3">
+                                <div t-foreach="state.activities" t-as="act" t-key="act.title" class="p-3 rounded-3 bg-light border">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <span class="fw-bold text-dark"><t t-esc="act.title"/></span>
+                                        <small class="badge bg-primary text-white"><t t-esc="act.time"/></small>
+                                    </div>
+                                    <p class="text-secondary small mb-0"><t t-esc="act.description"/></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </t>
+    </div>
+</t>
+
+</templates>
