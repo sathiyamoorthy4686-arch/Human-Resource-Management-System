@@ -3,10 +3,12 @@
 Dayflow HRMS - Master Administrator & Strict RBAC with File-Based Persistent Storage
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
 
-Fixes:
-- Bulletproof render() error handling: Safe property access with default fallbacks so delete operations never cause JS exceptions.
-- fetchState() will NEVER kick the user to the login screen on unexpected JS warnings.
-- Robust JSON file persistence (`dayflow_db.json`).
+Features:
+- Smart Duplicate Email Handling:
+  * Automatically suggests unique email handles (e.g. sathiya2@dayflow.demo).
+  * Allows 1-click update/overwrite of existing employee passwords and profiles if needed.
+- Full JSON File Persistence (`dayflow_db.json`).
+- Strict RBAC: Employees see only Dashboard and My Profile.
 """
 
 import os
@@ -127,6 +129,7 @@ class HRCreateEmployeePayload(BaseModel):
     dayflow_emp_id: Optional[str] = None
     private_city: Optional[str] = "Headquarters"
     work_phone: Optional[str] = None
+    overwrite: Optional[bool] = False
 
 class ResetPasswordPayload(BaseModel):
     email: str
@@ -246,13 +249,54 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
         raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Master HR Administrator Sathiya Moorthy can provision employees.")
 
     email = payload.email.strip().lower()
-    if email in DB["users"]:
-        raise HTTPException(status_code=400, detail=f"An employee with Email ID '{email}' already exists in the system.")
-
     password_clean = payload.password.strip()
     if not password_clean:
         password_clean = "Dayflow@" + "".join(random.choices(string.digits, k=4))
 
+    # IF EMPLOYEE EMAIL ALREADY EXISTS
+    if email in DB["users"]:
+        if not payload.overwrite:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"EXISTS: An employee with Email ID '{email}' already exists in the system."
+            )
+        
+        # Overwrite/Update existing user & employee details
+        user = DB["users"][email]
+        user["name"] = payload.name.strip()
+        user["password_hash"] = hash_pw(password_clean)
+        user["password_plain"] = password_clean
+        user["role_label"] = f"Employee ({payload.job_title})"
+
+        emp = next((e for e in DB["employees"] if e["work_email"] == email), None)
+        if emp:
+            emp["name"] = payload.name.strip()
+            emp["job_title"] = payload.job_title
+            emp["department"] = payload.department
+            emp["salary_amount"] = float(payload.salary_amount or 6500.0)
+            if payload.work_phone: emp["work_phone"] = payload.work_phone
+            if payload.private_city: emp["private_city"] = payload.private_city
+            dayflow_id = emp["dayflow_emp_id"]
+        else:
+            dayflow_id = f"DF-{EMP_SEQ}"
+            EMP_SEQ += 1
+
+        save_database()
+        return {
+            "success": True,
+            "message": f"Successfully updated profile & password for {payload.name} ({email})!",
+            "employee": emp or {},
+            "credentials": {
+                "name": payload.name.strip(),
+                "email": email,
+                "password": password_clean,
+                "dayflow_emp_id": dayflow_id,
+                "role": f"Employee ({payload.job_title})",
+                "department": payload.department
+            }
+        }
+
+    # CREATE BRAND NEW EMPLOYEE
     user_id = len(DB["users"]) + 1
     emp_id_num = len(DB["employees"]) + 1
     dayflow_id = payload.dayflow_emp_id.strip() if payload.dayflow_emp_id else f"DF-{EMP_SEQ}"
@@ -1531,13 +1575,13 @@ def index_page():
         <div class="modal-card" style="max-width:500px;">
             <div class="modal-header" style="background:rgba(16,185,129,0.15);border-bottom:1px solid rgba(16,185,129,0.3);">
                 <h3 style="font-size:1.15rem;font-weight:700;color:var(--success);display:flex;align-items:center;gap:0.5rem;">
-                    <i class="fa-solid fa-circle-check"></i> Employee Account Created!
+                    <i class="fa-solid fa-circle-check"></i> Employee Account Ready!
                 </h3>
                 <i class="fa-solid fa-xmark" style="cursor:pointer;font-size:1.2rem;" onclick="closeCredentialsModal()"></i>
             </div>
             <div class="modal-body">
                 <p style="font-size:0.88rem;color:#cbd5e1;margin-bottom:1.25rem;">
-                    The employee has been provisioned. Share these login credentials with the team member:
+                    The employee credentials are ready. Share these login details with the team member:
                 </p>
 
                 <div class="form-group">
@@ -1714,8 +1758,20 @@ def index_page():
 
         function autoSuggestEmail(name) {
             if (!name) return;
-            const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9 ]/g, '').replace(/\\s+/g, '.');
-            document.getElementById('newEmpEmail').value = `${cleaned}@dayflow.demo`;
+            const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+            if (!cleaned) return;
+            
+            // Check existing users to suggest unique handle
+            const existingEmails = appState && appState.all_users ? appState.all_users.map(u => u.email.toLowerCase()) : [];
+            let cand = `${cleaned}@dayflow.demo`;
+            if (existingEmails.includes(cand)) {
+                let seq = 2;
+                while (existingEmails.includes(`${cleaned}${seq}@dayflow.demo`)) {
+                    seq++;
+                }
+                cand = `${cleaned}${seq}@dayflow.demo`;
+            }
+            document.getElementById('newEmpEmail').value = cand;
         }
 
         function quickFill(email, pw) {
@@ -1746,15 +1802,23 @@ def index_page():
             }
         }
 
-        async function handleHRCreateEmployee(e) {
-            e.preventDefault();
+        async function handleHRCreateEmployee(e, overwrite = false) {
+            if (e && e.preventDefault) e.preventDefault();
+            const emailVal = document.getElementById('newEmpEmail').value.trim();
+            const nameVal = document.getElementById('newEmpName').value.trim();
+            const pwdVal = document.getElementById('newEmpPassword').value.trim();
+            const deptVal = document.getElementById('newEmpDept').value;
+            const jobVal = document.getElementById('newEmpJobTitle').value.trim();
+            const salVal = parseFloat(document.getElementById('newEmpSalary').value) || 7500.0;
+
             const payload = {
-                name: document.getElementById('newEmpName').value,
-                email: document.getElementById('newEmpEmail').value,
-                password: document.getElementById('newEmpPassword').value,
-                department: document.getElementById('newEmpDept').value,
-                job_title: document.getElementById('newEmpJobTitle').value,
-                salary_amount: parseFloat(document.getElementById('newEmpSalary').value) || 7500.0
+                name: nameVal,
+                email: emailVal,
+                password: pwdVal,
+                department: deptVal,
+                job_title: jobVal,
+                salary_amount: salVal,
+                overwrite: overwrite
             };
 
             try {
@@ -1764,7 +1828,19 @@ def index_page():
                     body: JSON.stringify(payload)
                 });
                 const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Failed to create employee');
+                if (!res.ok) {
+                    if (res.status === 400 && data.detail && data.detail.includes('already exists')) {
+                        const doUpdate = confirm(`Employee with Email ID '${emailVal}' already exists in the system.\n\nWould you like to UPDATE this existing employee's password and profile with the new details?`);
+                        if (doUpdate) {
+                            return handleHRCreateEmployee(null, true);
+                        } else {
+                            // Suggest next available email handle
+                            autoSuggestEmail(nameVal + 'new');
+                            return;
+                        }
+                    }
+                    throw new Error(data.detail || 'Failed to create employee');
+                }
 
                 closeCreateEmpModal();
                 document.getElementById('createEmpForm').reset();
@@ -2330,6 +2406,6 @@ if __name__ == "__main__":
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
     print(f"   * Permanent Storage File: {DB_FILE}")
-    print("   * Robust delete & render error handling (No kicks to login page)")
+    print("   * Smart Email auto-suggestion & 1-click update on existing emails")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
