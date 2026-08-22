@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Dayflow HRMS - Authentication & RBAC Enabled Server
-Complete implementation of User Registration, Login, Session Management,
-and Role-Based Access Controls (RBAC) mirroring Odoo 17 security rules.
+With HR Employee Email Provisioning & Account Creation Workflow.
 """
 
 import os
@@ -16,17 +15,14 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, EmailStr
 import uvicorn
 
-app = FastAPI(title="Dayflow HRMS with RBAC", description="Every workday, perfectly aligned.")
+app = FastAPI(title="Dayflow HRMS", description="Every workday, perfectly aligned.")
 
-# Utility password hasher
 def hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
-# Database Schema & Seed Data
 DEFAULT_PASS = hash_pw("dayflow123")
 
 DB = {
-    # res.users collection
     "users": {
         "alex.morgan@dayflow.demo": {
             "id": 1,
@@ -34,7 +30,7 @@ DB = {
             "password_hash": DEFAULT_PASS,
             "name": "Alex Morgan",
             "email": "alex.morgan@dayflow.demo",
-            "role": "admin", # 'admin' (HR Manager), 'officer' (HR Officer), 'employee' (Self-service user)
+            "role": "admin",
             "role_label": "HR Director / Administrator",
             "is_admin": True,
             "is_officer": True,
@@ -81,7 +77,6 @@ DB = {
             "created_at": "2026-02-10T09:00:00"
         }
     },
-    # hr.employee collection
     "employees": [
         {
             "id": 1,
@@ -172,7 +167,6 @@ DB = {
             "worked_hours": 0.0
         }
     ],
-    # hr.leave collection
     "leaves": [
         {
             "id": 1,
@@ -207,7 +201,6 @@ DB = {
             "manager_comment": "Approved by Alex Morgan. Rest well!"
         }
     ],
-    # hr.attendance collection
     "attendance_logs": [
         {
             "id": 1,
@@ -240,18 +233,13 @@ DB = {
             "worked_hours": "8.5h"
         }
     ],
-    # Active Session Tokens
     "sessions": {}
 }
 
-# Pre-seed initial token for demo convenience
 DEFAULT_SESSION_TOKEN = "session-alex-admin-token"
 DB["sessions"][DEFAULT_SESSION_TOKEN] = "alex.morgan@dayflow.demo"
-
-# Sequence for employee ID
 EMP_SEQ = 1005
 
-# Pydantic Request Models
 class LoginPayload(BaseModel):
     email: str
     password: str
@@ -260,11 +248,24 @@ class RegisterPayload(BaseModel):
     name: str
     email: str
     password: str
-    role: str # 'employee' or 'hr_officer' / 'admin'
+    role: str
     department: str
     job_title: Optional[str] = "Team Member"
-    custom_emp_id: Optional[str] = None
-    salary_amount: Optional[float] = 6500.0
+
+class HRCreateEmployeePayload(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: str
+    department: str
+    job_title: str
+    salary_amount: float
+    salary_type: Optional[str] = "Monthly Fixed"
+    bank_name: Optional[str] = "Company Payroll Bank"
+    bank_account_no: Optional[str] = "US •••• 1000"
+    dayflow_emp_id: Optional[str] = None
+    private_city: Optional[str] = "Headquarters"
+    work_phone: Optional[str] = None
 
 class LeaveRequestPayload(BaseModel):
     leave_type: str
@@ -292,19 +293,14 @@ class AdminSalaryUpdatePayload(BaseModel):
     bank_name: str
     bank_account_no: str
 
-# Helper to retrieve current authenticated user
 def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
     if not authorization:
-        # Fallback to default active user for seamless browser usage
         return DB["users"]["alex.morgan@dayflow.demo"]
-    
     token = authorization.replace("Bearer ", "").strip()
     if token not in DB["sessions"]:
-        # Check if email passed directly as token
         if token in DB["users"]:
             return DB["users"][token]
         return DB["users"]["alex.morgan@dayflow.demo"]
-    
     email = DB["sessions"][token]
     user = DB["users"].get(email)
     if not user:
@@ -313,98 +309,16 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
 
 # ================= AUTHENTICATION ENDPOINTS =================
 
-@app.post("/api/auth/register")
-def register_user(payload: RegisterPayload):
-    global EMP_SEQ
-    email = payload.email.strip().lower()
-    
-    if email in DB["users"]:
-        raise HTTPException(status_code=400, detail="An account with this email already exists.")
-    
-    is_admin = payload.role in ["admin", "hr_officer", "hr_manager"]
-    role_type = "admin" if is_admin else "employee"
-    role_label = "HR Administrator" if is_admin else f"Employee ({payload.job_title})"
-    
-    user_id = len(DB["users"]) + 1
-    emp_id_num = len(DB["employees"]) + 1
-    dayflow_id = payload.custom_emp_id.strip() if payload.custom_emp_id else f"DF-{EMP_SEQ}"
-    EMP_SEQ += 1
-
-    # 1. Create User
-    new_user = {
-        "id": user_id,
-        "login": email,
-        "password_hash": hash_pw(payload.password),
-        "name": payload.name.strip(),
-        "email": email,
-        "role": role_type,
-        "role_label": role_label,
-        "is_admin": is_admin,
-        "is_officer": is_admin,
-        "employee_id": emp_id_num,
-        "created_at": datetime.now().isoformat()
-    }
-    DB["users"][email] = new_user
-
-    # 2. Provision Employee Profile (RBAC rule: base.group_user linkage)
-    new_employee = {
-        "id": emp_id_num,
-        "user_id": user_id,
-        "name": payload.name.strip(),
-        "dayflow_emp_id": dayflow_id,
-        "job_title": payload.job_title or "Team Member",
-        "department": payload.department or "General",
-        "work_email": email,
-        "work_phone": "+1 555-0" + str(100 + emp_id_num),
-        "mobile_phone": "+1 555-0" + str(200 + emp_id_num),
-        "private_city": "Remote",
-        "salary_amount": float(payload.salary_amount or 6500.0),
-        "salary_type": "Monthly Fixed",
-        "bank_name": "Standard Chartered Bank",
-        "bank_account_no": f"US{emp_id_num * 11} •••• {emp_id_num * 99}",
-        "emergency_contact_name": "Primary Emergency Contact",
-        "emergency_contact_relation": "Family",
-        "emergency_contact_phone": "+1 555-0999",
-        "attendance_state": "checked_out",
-        "last_check_in": None,
-        "worked_hours": 0.0
-    }
-    DB["employees"].append(new_employee)
-
-    # 3. Create Session Token
-    token = f"sess-{uuid.uuid4().hex[:16]}"
-    DB["sessions"][token] = email
-
-    return {
-        "success": True,
-        "message": f"Welcome to Dayflow, {payload.name}! Your {dayflow_id} profile was successfully provisioned.",
-        "token": token,
-        "user": {
-            "id": new_user["id"],
-            "name": new_user["name"],
-            "email": new_user["email"],
-            "role": new_user["role"],
-            "role_label": new_user["role_label"],
-            "is_admin": new_user["is_admin"],
-            "dayflow_emp_id": dayflow_id
-        }
-    }
-
 @app.post("/api/auth/login")
 def login_user(payload: LoginPayload):
     email = payload.email.strip().lower()
     user = DB["users"].get(email)
-    
     if not user:
-        raise HTTPException(status_code=401, detail="No account found with this email address.")
-    
+        raise HTTPException(status_code=401, detail="No account found with this email ID.")
     if user["password_hash"] != hash_pw(payload.password):
-        raise HTTPException(status_code=401, detail="Invalid password credentials.")
-    
-    # Generate session
+        raise HTTPException(status_code=401, detail="Invalid password.")
     token = f"sess-{uuid.uuid4().hex[:16]}"
     DB["sessions"][token] = email
-
     return {
         "success": True,
         "message": f"Welcome back, {user['name']}!",
@@ -420,6 +334,140 @@ def login_user(payload: LoginPayload):
         }
     }
 
+@app.post("/api/auth/register")
+def register_user(payload: RegisterPayload):
+    global EMP_SEQ
+    email = payload.email.strip().lower()
+    if email in DB["users"]:
+        raise HTTPException(status_code=400, detail="An account with this email ID already exists.")
+    
+    is_admin = payload.role in ["admin", "hr_officer", "hr_manager"]
+    role_type = "admin" if is_admin else "employee"
+    role_label = "HR Administrator" if is_admin else f"Employee ({payload.job_title})"
+    
+    user_id = len(DB["users"]) + 1
+    emp_id_num = len(DB["employees"]) + 1
+    dayflow_id = f"DF-{EMP_SEQ}"
+    EMP_SEQ += 1
+
+    new_user = {
+        "id": user_id,
+        "login": email,
+        "password_hash": hash_pw(payload.password),
+        "name": payload.name.strip(),
+        "email": email,
+        "role": role_type,
+        "role_label": role_label,
+        "is_admin": is_admin,
+        "is_officer": is_admin,
+        "employee_id": emp_id_num,
+        "created_at": datetime.now().isoformat()
+    }
+    DB["users"][email] = new_user
+
+    new_employee = {
+        "id": emp_id_num,
+        "user_id": user_id,
+        "name": payload.name.strip(),
+        "dayflow_emp_id": dayflow_id,
+        "job_title": payload.job_title or "Team Member",
+        "department": payload.department or "General",
+        "work_email": email,
+        "work_phone": "+1 555-0" + str(100 + emp_id_num),
+        "mobile_phone": "+1 555-0" + str(200 + emp_id_num),
+        "private_city": "Remote",
+        "salary_amount": 6500.0,
+        "salary_type": "Monthly Fixed",
+        "bank_name": "Standard Chartered Bank",
+        "bank_account_no": f"US{emp_id_num * 11} •••• {emp_id_num * 99}",
+        "emergency_contact_name": "Primary Emergency Contact",
+        "emergency_contact_relation": "Family",
+        "emergency_contact_phone": "+1 555-0999",
+        "attendance_state": "checked_out",
+        "last_check_in": None,
+        "worked_hours": 0.0
+    }
+    DB["employees"].append(new_employee)
+
+    token = f"sess-{uuid.uuid4().hex[:16]}"
+    DB["sessions"][token] = email
+
+    return {
+        "success": True,
+        "message": f"Welcome to Dayflow, {payload.name}! Profile {dayflow_id} created.",
+        "token": token,
+        "user": new_user
+    }
+
+# ================= HR EXCLUSIVE: CREATE EMPLOYEE EMAIL ID & ACCOUNT =================
+
+@app.post("/api/admin/create_employee")
+def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional[str] = Header(None)):
+    global EMP_SEQ
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin") and not hr_user.get("is_officer"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Directors / Officers can create new employee accounts.")
+
+    email = payload.email.strip().lower()
+    if email in DB["users"]:
+        raise HTTPException(status_code=400, detail="An employee with this Email ID already exists in the system.")
+
+    user_id = len(DB["users"]) + 1
+    emp_id_num = len(DB["employees"]) + 1
+    dayflow_id = payload.dayflow_emp_id.strip() if payload.dayflow_emp_id else f"DF-{EMP_SEQ}"
+    EMP_SEQ += 1
+
+    is_admin_role = payload.role in ["admin", "hr_officer", "hr_manager"]
+    role_type = "admin" if is_admin_role else "employee"
+    role_label = "HR Administrator" if is_admin_role else f"Employee ({payload.job_title})"
+
+    # 1. Provision User Login Account
+    new_user = {
+        "id": user_id,
+        "login": email,
+        "password_hash": hash_pw(payload.password),
+        "name": payload.name.strip(),
+        "email": email,
+        "role": role_type,
+        "role_label": role_label,
+        "is_admin": is_admin_role,
+        "is_officer": is_admin_role,
+        "employee_id": emp_id_num,
+        "created_at": datetime.now().isoformat()
+    }
+    DB["users"][email] = new_user
+
+    # 2. Provision Employee Directory & Compensation Profile
+    new_emp = {
+        "id": emp_id_num,
+        "user_id": user_id,
+        "name": payload.name.strip(),
+        "dayflow_emp_id": dayflow_id,
+        "job_title": payload.job_title,
+        "department": payload.department,
+        "work_email": email,
+        "work_phone": payload.work_phone or ("+1 555-0" + str(100 + emp_id_num)),
+        "mobile_phone": "+1 555-0" + str(200 + emp_id_num),
+        "private_city": payload.private_city or "Headquarters",
+        "salary_amount": float(payload.salary_amount or 6500.0),
+        "salary_type": payload.salary_type or "Monthly Fixed",
+        "bank_name": payload.bank_name or "Silicon Valley Bank",
+        "bank_account_no": payload.bank_account_no or f"US{emp_id_num*17} •••• {emp_id_num*88}",
+        "emergency_contact_name": "Emergency Contact",
+        "emergency_contact_relation": "Family",
+        "emergency_contact_phone": "+1 555-0999",
+        "attendance_state": "checked_out",
+        "last_check_in": None,
+        "worked_hours": 0.0
+    }
+    DB["employees"].append(new_emp)
+
+    return {
+        "success": True,
+        "message": f"Successfully created employee profile & email ID for {payload.name} ({email}) with Dayflow ID {dayflow_id}!",
+        "employee": new_emp
+    }
+
 @app.post("/api/auth/logout")
 def logout_user(authorization: Optional[str] = Header(None)):
     if authorization:
@@ -428,42 +476,25 @@ def logout_user(authorization: Optional[str] = Header(None)):
             del DB["sessions"][token]
     return {"success": True, "message": "Logged out successfully."}
 
-# ================= RBAC-SCOPED STATE & OPERATIONS =================
+# ================= STATE & WORKFLOWS =================
 
 @app.get("/api/state")
 def get_state(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
-
     is_admin = user.get("is_admin", False) or user.get("is_officer", False)
 
-    # 1. Attendance Record Rule Isolation:
-    # Rule dayflow_attendance_rule_employee: Employee sees only their own logs.
-    # Rule dayflow_attendance_rule_officer: HR Officer sees all logs.
     if is_admin:
         attendance_logs = DB["attendance_logs"]
-    else:
-        attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == user["employee_id"]]
-
-    # 2. Leave Record Rule Isolation:
-    # Rule dayflow_leave_rule_employee: Employee sees only their leaves.
-    # Rule dayflow_leave_rule_officer: HR Officer sees all requests and pending queue.
-    if is_admin:
         all_leaves = DB["leaves"]
         pending_leaves = [l for l in DB["leaves"] if l["state"] == "confirm"]
-    else:
-        all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == user["employee_id"]]
-        pending_leaves = [] # Non-admins have no pending approvals access
-
-    # 3. Employee List & Salary Access Control:
-    # Employees see directory contact info, but salary details of others are hidden.
-    if is_admin:
         salary_records = DB["employees"]
         employees_list = DB["employees"]
     else:
-        # Self-only salary
+        attendance_logs = [a for a in DB["attendance_logs"] if a.get("employee_id") == user["employee_id"]]
+        all_leaves = [l for l in DB["leaves"] if l.get("employee_id") == user["employee_id"]]
+        pending_leaves = []
         salary_records = [emp] if emp else []
-        # Directory without salary
         employees_list = [
             {
                 "id": e["id"],
@@ -478,7 +509,6 @@ def get_state(authorization: Optional[str] = Header(None)):
             for e in DB["employees"]
         ]
 
-    # Metrics computation
     total_emps = len(DB["employees"])
     present_emps = len([e for e in DB["employees"] if e["attendance_state"] == "checked_in"])
     on_leave = len([l for l in DB["leaves"] if l["state"] == "validate" and l["number_of_days"] > 0 and "Sick" in l["type"]])
@@ -488,7 +518,6 @@ def get_state(authorization: Optional[str] = Header(None)):
         "current_user": user,
         "employee": emp,
         "is_admin": is_admin,
-        "rbac_scope": "organization_wide" if is_admin else "self_isolated",
         "metrics": {
             "total_employees": total_emps,
             "present_today": present_emps,
@@ -508,12 +537,11 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
     if not emp:
-        raise HTTPException(status_code=404, detail="No linked employee record found for your user.")
+        raise HTTPException(status_code=404, detail="Employee profile not found")
 
     now = datetime.now()
     if emp["attendance_state"] == "checked_in":
         emp["attendance_state"] = "checked_out"
-        # Record attendance log entry
         DB["attendance_logs"].insert(0, {
             "id": len(DB["attendance_logs"]) + 1,
             "employee_id": emp["id"],
@@ -524,19 +552,19 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
             "status": "Present",
             "worked_hours": f"{emp['worked_hours']:.1f}h"
         })
-        return {"status": "checked_out", "message": f"Successfully checked out, {emp['name']}. Have a great rest!"}
+        return {"status": "checked_out", "message": f"Successfully checked out, {emp['name']}."}
     else:
         emp["attendance_state"] = "checked_in"
         emp["last_check_in"] = now.strftime("%Y-%m-%d %H:%M")
         emp["worked_hours"] = 0.1
-        return {"status": "checked_in", "message": f"Welcome back, {emp['name']}! Checked in successfully."}
+        return {"status": "checked_in", "message": f"Welcome, {emp['name']}! Checked in successfully."}
 
 @app.post("/api/submit_leave")
 def submit_leave(req: LeaveRequestPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"]), None)
     if not emp:
-        raise HTTPException(status_code=404, detail="Employee record not found")
+        raise HTTPException(status_code=404, detail="Employee not found")
 
     cat_map = {"Paid Time Off (PTO)": "paid", "Sick Leave": "sick", "Unpaid Leave": "unpaid"}
     new_leave = {
@@ -556,37 +584,33 @@ def submit_leave(req: LeaveRequestPayload, authorization: Optional[str] = Header
         "manager_comment": ""
     }
     DB["leaves"].insert(0, new_leave)
-    return {"success": True, "leave": new_leave, "message": "Leave application submitted to HR for review."}
+    return {"success": True, "leave": new_leave, "message": "Time-off application submitted to HR."}
 
 @app.post("/api/approve_leave")
 def approve_leave(payload: LeaveActionPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Directors / Officers can approve time-off requests.")
-    
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can approve leaves.")
     leave = next((l for l in DB["leaves"] if l["id"] == payload.leave_id), None)
     if not leave:
-        raise HTTPException(status_code=404, detail="Leave request record not found.")
-    
+        raise HTTPException(status_code=404, detail="Leave record not found")
     leave["state"] = "validate"
     leave["state_label"] = "Approved"
-    leave["manager_comment"] = payload.comment or f"Approved by {user['name']} (HR Director)."
-    return {"success": True, "message": f"Time-off request for {leave['employee_name']} has been approved."}
+    leave["manager_comment"] = payload.comment or f"Approved by {user['name']}."
+    return {"success": True, "message": f"Leave approved for {leave['employee_name']}."}
 
 @app.post("/api/refuse_leave")
 def refuse_leave(payload: LeaveActionPayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Directors / Officers can refuse time-off requests.")
-    
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can refuse leaves.")
     leave = next((l for l in DB["leaves"] if l["id"] == payload.leave_id), None)
     if not leave:
-        raise HTTPException(status_code=404, detail="Leave request record not found.")
-    
+        raise HTTPException(status_code=404, detail="Leave record not found")
     leave["state"] = "refuse"
     leave["state_label"] = "Refused"
-    leave["manager_comment"] = payload.comment or f"Declined by {user['name']} (HR Director)."
-    return {"success": True, "message": f"Time-off request for {leave['employee_name']} has been declined."}
+    leave["manager_comment"] = payload.comment or f"Declined by {user['name']}."
+    return {"success": True, "message": f"Leave request for {leave['employee_name']} declined."}
 
 @app.post("/api/update_profile")
 def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] = Header(None)):
@@ -595,7 +619,6 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
     if not emp:
         raise HTTPException(status_code=404, detail="Employee not found")
 
-    # Field-level security rule: Only self-contact fields can be modified
     if payload.work_phone is not None: emp["work_phone"] = payload.work_phone
     if payload.mobile_phone is not None: emp["mobile_phone"] = payload.mobile_phone
     if payload.private_city is not None: emp["private_city"] = payload.private_city
@@ -603,13 +626,13 @@ def update_profile(payload: ProfileUpdatePayload, authorization: Optional[str] =
     if payload.emergency_contact_relation is not None: emp["emergency_contact_relation"] = payload.emergency_contact_relation
     if payload.emergency_contact_phone is not None: emp["emergency_contact_phone"] = payload.emergency_contact_phone
 
-    return {"success": True, "message": "Personal profile details updated successfully!", "employee": emp}
+    return {"success": True, "message": "Profile updated successfully!", "employee": emp}
 
 @app.post("/api/admin/update_salary")
 def update_salary(payload: AdminSalaryUpdatePayload, authorization: Optional[str] = Header(None)):
     user = get_current_user(authorization)
     if not user.get("is_admin") and not user.get("is_officer"):
-        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can update compensation structures.")
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only HR Management can update compensation.")
 
     emp = next((e for e in DB["employees"] if e["id"] == payload.employee_id), None)
     if not emp:
@@ -620,9 +643,9 @@ def update_salary(payload: AdminSalaryUpdatePayload, authorization: Optional[str
     emp["bank_name"] = payload.bank_name
     emp["bank_account_no"] = payload.bank_account_no
 
-    return {"success": True, "message": f"Compensation structure updated for {emp['name']}."}
+    return {"success": True, "message": f"Salary updated for {emp['name']}."}
 
-# ================= FRONTEND WEB APPLICATION =================
+# ================= USER INTERFACE =================
 
 @app.get("/", response_class=HTMLResponse)
 def index_page():
@@ -632,7 +655,7 @@ def index_page():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dayflow HRMS | Authentication &amp; RBAC Control</title>
+    <title>Dayflow HRMS | Human Resource Management System</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -655,296 +678,139 @@ def index_page():
             --text-muted: #94a3b8;
             --sidebar-width: 260px;
             --header-height: 72px;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3), 0 4px 6px -2px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
             --shadow-glow: 0 0 25px rgba(99, 102, 241, 0.3);
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', sans-serif; }
         body { background-color: var(--bg-body); color: var(--text-main); min-height: 100vh; display: flex; overflow-x: hidden; }
 
-        /* Auth Container Overlay */
+        /* Auth Overlay */
         #authOverlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: radial-gradient(circle at 50% 20%, #1e1b4b 0%, #0f172a 70%);
-            z-index: 10000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 1.5rem;
+            z-index: 10000; display: flex; align-items: center; justify-content: center; padding: 1.5rem;
         }
 
         .auth-card {
-            background: rgba(30, 41, 59, 0.95);
-            backdrop-filter: blur(16px);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            border-radius: 20px;
-            width: 100%;
-            max-width: 480px;
-            box-shadow: var(--shadow-lg), var(--shadow-glow);
-            overflow: hidden;
-            animation: fadeIn 0.3s ease;
+            background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(16px);
+            border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 20px;
+            width: 100%; max-width: 480px; box-shadow: var(--shadow-lg), var(--shadow-glow);
+            overflow: hidden; animation: fadeIn 0.3s ease;
         }
 
         @keyframes fadeIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
 
-        .auth-header {
-            padding: 2rem 2rem 1.25rem;
-            text-align: center;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .auth-brand {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.75rem;
-            margin-bottom: 0.5rem;
-        }
-
-        .auth-tabs {
-            display: flex;
-            border-bottom: 1px solid var(--border);
-            background: rgba(0, 0, 0, 0.2);
-        }
-
-        .auth-tab {
-            flex: 1;
-            padding: 0.9rem;
-            text-align: center;
-            font-weight: 600;
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.2s ease;
-        }
-
-        .auth-tab.active {
-            color: white;
-            border-bottom-color: var(--primary);
-            background: rgba(255, 255, 255, 0.03);
-        }
-
+        .auth-header { padding: 2rem 2rem 1.25rem; text-align: center; border-bottom: 1px solid var(--border); }
+        .auth-brand { display: inline-flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
         .auth-body { padding: 1.75rem 2rem; }
 
-        .demo-pills {
-            margin-top: 1.25rem;
-            padding-top: 1.25rem;
-            border-top: 1px dashed var(--border);
-        }
-
-        .demo-pills-title {
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            font-weight: 700;
-            color: var(--text-muted);
-            margin-bottom: 0.6rem;
-            letter-spacing: 0.05em;
-        }
-
-        .pill-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-        }
+        .demo-pills { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px dashed var(--border); }
+        .demo-pills-title { font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; letter-spacing: 0.05em; }
+        .pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
 
         .demo-btn {
-            background: #0f172a;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 0.5rem 0.75rem;
-            color: #cbd5e1;
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            text-align: left;
-            transition: all 0.2s ease;
-            display: flex;
-            flex-direction: column;
-            gap: 0.15rem;
+            background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
+            padding: 0.5rem 0.75rem; color: #cbd5e1; font-size: 0.75rem; font-weight: 600;
+            cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; flex-direction: column; gap: 0.15rem;
         }
-
-        .demo-btn:hover {
-            border-color: var(--primary);
-            background: rgba(99, 102, 241, 0.1);
-            color: white;
-        }
-
+        .demo-btn:hover { border-color: var(--primary); background: rgba(99, 102, 241, 0.1); color: white; }
         .demo-btn span { font-size: 0.65rem; color: var(--primary-light); }
 
-        /* Main App Sidebar */
+        /* Sidebar */
         aside {
-            width: var(--sidebar-width);
-            background: #111827;
-            border-right: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            position: fixed;
-            top: 0; bottom: 0; left: 0;
-            z-index: 100;
+            width: var(--sidebar-width); background: #111827; border-right: 1px solid var(--border);
+            display: flex; flex-direction: column; position: fixed; top: 0; bottom: 0; left: 0; z-index: 100;
         }
 
         .brand-header {
-            height: var(--header-height);
-            display: flex;
-            align-items: center;
-            padding: 0 1.5rem;
-            gap: 0.75rem;
-            border-bottom: 1px solid var(--border);
+            height: var(--header-height); display: flex; align-items: center;
+            padding: 0 1.5rem; gap: 0.75rem; border-bottom: 1px solid var(--border);
         }
 
         .brand-icon {
-            width: 40px; height: 40px;
-            background: var(--primary-gradient);
-            border-radius: 12px;
-            display: flex; align-items: center; justify-content: center;
-            color: white; font-size: 1.2rem;
-            box-shadow: var(--shadow-glow);
+            width: 40px; height: 40px; background: var(--primary-gradient);
+            border-radius: 12px; display: flex; align-items: center; justify-content: center;
+            color: white; font-size: 1.2rem; box-shadow: var(--shadow-glow);
         }
 
         .brand-text h1 {
-            font-size: 1.25rem; font-weight: 800;
-            letter-spacing: -0.025em;
+            font-size: 1.25rem; font-weight: 800; letter-spacing: -0.025em;
             background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
             -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
 
-        .brand-text span {
-            font-size: 0.68rem; color: var(--primary-light);
-            text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; display: block;
-        }
-
-        .nav-group {
-            padding: 1.25rem 0.75rem;
-            display: flex; flex-direction: column; gap: 0.4rem;
-            flex: 1; overflow-y: auto;
-        }
-
-        .nav-label {
-            font-size: 0.7rem; font-weight: 700;
-            text-transform: uppercase; letter-spacing: 0.08em;
-            color: var(--text-muted); padding: 0.5rem 0.75rem;
-        }
+        .brand-text span { font-size: 0.68rem; color: var(--primary-light); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 700; display: block; }
+        .nav-group { padding: 1.25rem 0.75rem; display: flex; flex-direction: column; gap: 0.4rem; flex: 1; overflow-y: auto; }
+        .nav-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); padding: 0.5rem 0.75rem; }
 
         .nav-item {
-            display: flex; align-items: center; gap: 0.85rem;
-            padding: 0.75rem 1rem; border-radius: 10px;
-            color: var(--text-muted); text-decoration: none;
-            font-size: 0.92rem; font-weight: 500;
-            cursor: pointer; transition: all 0.2s ease;
+            display: flex; align-items: center; gap: 0.85rem; padding: 0.75rem 1rem;
+            border-radius: 10px; color: var(--text-muted); text-decoration: none;
+            font-size: 0.92rem; font-weight: 500; cursor: pointer; transition: all 0.2s ease;
         }
-
         .nav-item:hover { background: rgba(255, 255, 255, 0.05); color: var(--text-main); }
         .nav-item.active { background: var(--primary-gradient); color: white; box-shadow: var(--shadow-glow); font-weight: 600; }
         .nav-item i { width: 20px; font-size: 1.1rem; text-align: center; }
 
-        .nav-badge {
-            margin-left: auto; background: var(--danger);
-            color: white; font-size: 0.7rem; padding: 0.15rem 0.5rem;
-            border-radius: 9999px; font-weight: 700;
-        }
+        .nav-badge { margin-left: auto; background: var(--danger); color: white; font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 700; }
 
-        .rbac-tag {
-            font-size: 0.62rem;
-            padding: 0.15rem 0.45rem;
-            border-radius: 4px;
-            font-weight: 700;
-            text-transform: uppercase;
-            margin-left: auto;
-            background: rgba(99, 102, 241, 0.2);
-            color: var(--primary-light);
-            border: 1px solid rgba(99, 102, 241, 0.4);
-        }
+        .sidebar-footer { padding: 1rem; border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.2); display: flex; flex-direction: column; gap: 0.6rem; }
 
-        .sidebar-footer {
-            padding: 1rem;
-            border-top: 1px solid var(--border);
-            background: rgba(0, 0, 0, 0.2);
-            display: flex;
-            flex-direction: column;
-            gap: 0.6rem;
-        }
-
-        /* Main View */
+        /* Main Area */
         main { margin-left: var(--sidebar-width); flex: 1; display: flex; flex-direction: column; min-height: 100vh; }
 
         header {
-            height: var(--header-height);
-            background: rgba(17, 24, 39, 0.8);
-            backdrop-filter: blur(12px);
-            border-bottom: 1px solid var(--border);
+            height: var(--header-height); background: rgba(17, 24, 39, 0.8);
+            backdrop-filter: blur(12px); border-bottom: 1px solid var(--border);
             display: flex; align-items: center; justify-content: space-between;
             padding: 0 2rem; position: sticky; top: 0; z-index: 90;
         }
 
         .header-title h2 { font-size: 1.35rem; font-weight: 700; color: white; display: flex; align-items: center; gap: 0.75rem; }
         .header-title p { font-size: 0.8rem; color: var(--text-muted); }
-
         .header-actions { display: flex; align-items: center; gap: 1rem; }
 
         .role-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.4rem;
-            padding: 0.35rem 0.8rem;
-            border-radius: 9999px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+            display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.8rem;
+            border-radius: 9999px; font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
         }
-
         .role-pill.admin { background: rgba(99, 102, 241, 0.18); color: #a5b4fc; border: 1px solid rgba(99, 102, 241, 0.4); }
         .role-pill.employee { background: rgba(16, 185, 129, 0.18); color: #6ee7b7; border: 1px solid rgba(16, 185, 129, 0.4); }
 
         .status-chip {
-            display: flex; align-items: center; gap: 0.5rem;
-            padding: 0.4rem 0.9rem; border-radius: 9999px;
-            font-size: 0.8rem; font-weight: 600;
-            background: rgba(16, 185, 129, 0.15); color: var(--success);
-            border: 1px solid rgba(16, 185, 129, 0.3);
+            display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0.9rem;
+            border-radius: 9999px; font-size: 0.8rem; font-weight: 600;
+            background: rgba(16, 185, 129, 0.15); color: var(--success); border: 1px solid rgba(16, 185, 129, 0.3);
         }
-
-        .status-chip.checked_out {
-            background: rgba(239, 68, 68, 0.15); color: var(--danger);
-            border-color: rgba(239, 68, 68, 0.3);
-        }
-
+        .status-chip.checked_out { background: rgba(239, 68, 68, 0.15); color: var(--danger); border-color: rgba(239, 68, 68, 0.3); }
         .status-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 
         .content { padding: 2rem; display: flex; flex-direction: column; gap: 2rem; flex: 1; }
 
-        /* Hero Banner */
         .hero-card {
             background: linear-gradient(135deg, rgba(99, 102, 241, 0.15) 0%, rgba(6, 182, 212, 0.1) 100%), var(--bg-card);
-            border: 1px solid rgba(99, 102, 241, 0.3);
-            border-radius: 16px; padding: 1.75rem 2rem;
-            display: flex; align-items: center; justify-content: space-between;
-            box-shadow: var(--shadow-lg);
+            border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 16px; padding: 1.75rem 2rem;
+            display: flex; align-items: center; justify-content: space-between; box-shadow: var(--shadow-lg);
         }
 
         .hero-left h3 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.4rem; }
         .hero-left p { color: var(--text-muted); font-size: 0.95rem; }
 
         .attendance-toggle-box {
-            display: flex; align-items: center; gap: 1.5rem;
-            background: rgba(0, 0, 0, 0.3); padding: 0.9rem 1.4rem;
-            border-radius: 12px; border: 1px solid var(--border);
+            display: flex; align-items: center; gap: 1.5rem; background: rgba(0, 0, 0, 0.3);
+            padding: 0.9rem 1.4rem; border-radius: 12px; border: 1px solid var(--border);
         }
-
         .time-display { display: flex; flex-direction: column; }
         .time-display .label { font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
         .time-display .value { font-family: 'JetBrains Mono', monospace; font-size: 1.35rem; font-weight: 700; color: white; }
 
         .btn {
-            display: inline-flex; align-items: center; justify-content: center;
-            gap: 0.5rem; padding: 0.65rem 1.25rem; border-radius: 10px;
-            font-size: 0.9rem; font-weight: 600; cursor: pointer; border: none;
-            transition: all 0.2s ease; outline: none;
+            display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem;
+            padding: 0.65rem 1.25rem; border-radius: 10px; font-size: 0.9rem; font-weight: 600;
+            cursor: pointer; border: none; transition: all 0.2s ease; outline: none;
         }
-
         .btn-primary { background: var(--primary-gradient); color: white; box-shadow: var(--shadow-glow); }
         .btn-primary:hover { opacity: 0.92; transform: translateY(-1px); }
         .btn-danger { background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%); color: white; }
@@ -952,15 +818,8 @@ def index_page():
         .btn-secondary { background: #0f172a; border: 1px solid var(--border); color: var(--text-main); }
         .btn-secondary:hover { background: var(--bg-card-hover); border-color: var(--primary-light); }
 
-        /* Metrics */
         .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; }
-        .metric-card {
-            background: var(--bg-card); border: 1px solid var(--border);
-            border-radius: 14px; padding: 1.25rem 1.5rem;
-            display: flex; flex-direction: column; gap: 0.5rem;
-            transition: all 0.2s ease;
-        }
-        .metric-card:hover { transform: translateY(-3px); border-color: var(--primary-light); box-shadow: var(--shadow-md); }
+        .metric-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 1.25rem 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
         .metric-header { display: flex; align-items: center; justify-content: space-between; }
         .metric-title { font-size: 0.82rem; color: var(--text-muted); font-weight: 600; text-transform: uppercase; }
         .metric-icon { width: 36px; height: 36px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; }
@@ -979,13 +838,8 @@ def index_page():
         .card-title { font-size: 1.1rem; font-weight: 700; color: white; display: flex; align-items: center; gap: 0.6rem; }
         .card-body { padding: 1.5rem; flex: 1; }
 
-        /* Tables */
         table { width: 100%; border-collapse: collapse; text-align: left; font-size: 0.88rem; }
-        th {
-            background: rgba(0, 0, 0, 0.2); color: var(--text-muted);
-            font-weight: 600; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em;
-            padding: 0.85rem 1rem; border-bottom: 1px solid var(--border);
-        }
+        th { background: rgba(0, 0, 0, 0.2); color: var(--text-muted); font-weight: 600; text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.05em; padding: 0.85rem 1rem; border-bottom: 1px solid var(--border); }
         td { padding: 0.95rem 1rem; border-bottom: 1px solid rgba(51, 65, 85, 0.4); color: #cbd5e1; }
         tr:hover td { background: rgba(255, 255, 255, 0.02); color: white; }
 
@@ -997,11 +851,8 @@ def index_page():
 
         .form-group { margin-bottom: 1.1rem; display: flex; flex-direction: column; gap: 0.4rem; }
         .form-group label { font-size: 0.8rem; font-weight: 600; color: var(--text-muted); }
-        .form-control {
-            background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
-            padding: 0.65rem 0.9rem; color: white; font-size: 0.88rem; outline: none; transition: border-color 0.2s;
-        }
-        .form-control:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2); }
+        .form-control { background: #0f172a; border: 1px solid var(--border); border-radius: 8px; padding: 0.65rem 0.9rem; color: white; font-size: 0.88rem; outline: none; }
+        .form-control:focus { border-color: var(--primary); }
         textarea.form-control { resize: vertical; min-height: 80px; }
 
         .info-list { display: flex; flex-direction: column; gap: 0.9rem; }
@@ -1009,41 +860,19 @@ def index_page():
         .info-item .info-label { color: var(--text-muted); }
         .info-item .info-val { font-weight: 600; color: white; }
 
-        /* Modals */
-        .modal-overlay {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px);
-            display: none; align-items: center; justify-content: center; z-index: 1000;
-        }
-        .modal-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; width: 90%; max-width: 540px; box-shadow: var(--shadow-lg); overflow: hidden; }
+        .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(4px); display: none; align-items: center; justify-content: center; z-index: 1000; }
+        .modal-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; width: 90%; max-width: 580px; box-shadow: var(--shadow-lg); overflow: hidden; }
         .modal-header { padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
-        .modal-body { padding: 1.5rem; }
+        .modal-body { padding: 1.5rem; max-height: 75vh; overflow-y: auto; }
         .modal-footer { padding: 1rem 1.5rem; background: rgba(0, 0, 0, 0.2); border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.75rem; }
 
-        #toast {
-            position: fixed; bottom: 2rem; right: 2rem; padding: 0.9rem 1.4rem;
-            border-radius: 10px; background: var(--bg-card); border: 1px solid var(--primary);
-            box-shadow: var(--shadow-lg); color: white; font-weight: 600; font-size: 0.9rem;
-            display: none; align-items: center; gap: 0.6rem; z-index: 20000;
-        }
-
-        .rbac-notice {
-            background: rgba(99, 102, 241, 0.1);
-            border: 1px dashed rgba(99, 102, 241, 0.4);
-            border-radius: 10px;
-            padding: 0.75rem 1rem;
-            font-size: 0.8rem;
-            color: #c7d2fe;
-            margin-bottom: 1.25rem;
-            display: flex;
-            align-items: center;
-            gap: 0.6rem;
-        }
+        #toast { position: fixed; bottom: 2rem; right: 2rem; padding: 0.9rem 1.4rem; border-radius: 10px; background: var(--bg-card); border: 1px solid var(--primary); box-shadow: var(--shadow-lg); color: white; font-weight: 600; font-size: 0.9rem; display: none; align-items: center; gap: 0.6rem; z-index: 20000; }
+        .rbac-notice { background: rgba(99, 102, 241, 0.1); border: 1px dashed rgba(99, 102, 241, 0.4); border-radius: 10px; padding: 0.75rem 1rem; font-size: 0.8rem; color: #c7d2fe; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.6rem; }
     </style>
 </head>
 <body>
 
-    <!-- AUTHENTICATION MODAL (LOGIN & REGISTRATION) -->
+    <!-- AUTHENTICATION LOGIN OVERLAY -->
     <div id="authOverlay">
         <div class="auth-card">
             <div class="auth-header">
@@ -1051,27 +880,16 @@ def index_page():
                     <div class="brand-icon"><i class="fa-solid fa-bolt"></i></div>
                     <div class="brand-text" style="text-align:left;">
                         <h1 style="font-size:1.35rem;">Dayflow HRMS</h1>
-                        <span>Odoo 17 Security &amp; RBAC</span>
+                        <span>Human Resource Portal</span>
                     </div>
                 </div>
-                <p style="font-size:0.82rem;color:var(--text-muted);">Every workday, perfectly aligned.</p>
-            </div>
-
-            <!-- Login / Register Switch Tabs -->
-            <div class="auth-tabs">
-                <div class="auth-tab active" id="tabBtnLogin" onclick="switchAuthTab('login')">
-                    <i class="fa-solid fa-right-to-bracket"></i> Sign In
-                </div>
-                <div class="auth-tab" id="tabBtnRegister" onclick="switchAuthTab('register')">
-                    <i class="fa-solid fa-user-plus"></i> Create Account
-                </div>
+                <p style="font-size:0.82rem;color:var(--text-muted);">Sign in with your organizational credentials</p>
             </div>
 
             <div class="auth-body">
-                <!-- LOGIN FORM -->
                 <form id="loginForm" onsubmit="handleLogin(event)">
                     <div class="form-group">
-                        <label>Email Address</label>
+                        <label>Employee / HR Email ID</label>
                         <input type="email" id="loginEmail" class="form-control" placeholder="name@dayflow.demo" value="alex.morgan@dayflow.demo" required>
                     </div>
                     <div class="form-group">
@@ -1079,12 +897,12 @@ def index_page():
                         <input type="password" id="loginPassword" class="form-control" placeholder="••••••••" value="dayflow123" required>
                     </div>
                     <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">
-                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Authenticate Session
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to HRMS
                     </button>
 
                     <!-- Quick Demo Accounts -->
                     <div class="demo-pills">
-                        <div class="demo-pills-title"><i class="fa-solid fa-bolt-lightning"></i> 1-Click Demo Accounts (RBAC Test)</div>
+                        <div class="demo-pills-title"><i class="fa-solid fa-bolt-lightning"></i> 1-Click Quick Demo Sign In</div>
                         <div class="pill-grid">
                             <button type="button" class="demo-btn" onclick="quickFill('alex.morgan@dayflow.demo', 'dayflow123')">
                                 <strong>Alex Morgan</strong>
@@ -1105,55 +923,11 @@ def index_page():
                         </div>
                     </div>
                 </form>
-
-                <!-- REGISTRATION FORM WITH RBAC ROLE ASSIGNMENT -->
-                <form id="registerForm" style="display:none;" onsubmit="handleRegister(event)">
-                    <div class="form-group">
-                        <label>Full Name</label>
-                        <input type="text" id="regName" class="form-control" placeholder="e.g. Morgan Freeman" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Work Email</label>
-                        <input type="email" id="regEmail" class="form-control" placeholder="user@dayflow.demo" required>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
-                        <div class="form-group">
-                            <label>Password</label>
-                            <input type="password" id="regPassword" class="form-control" placeholder="••••••••" required>
-                        </div>
-                        <div class="form-group">
-                            <label>RBAC Security Role</label>
-                            <select id="regRole" class="form-control" required>
-                                <option value="employee">Employee (Self-Service)</option>
-                                <option value="hr_officer">HR Director / Admin</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.75rem;">
-                        <div class="form-group">
-                            <label>Department</label>
-                            <select id="regDepartment" class="form-control">
-                                <option value="Engineering">Engineering</option>
-                                <option value="Human Resources">Human Resources</option>
-                                <option value="Marketing & Growth">Marketing & Growth</option>
-                                <option value="Operations">Operations</option>
-                                <option value="Finance & Legal">Finance & Legal</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label>Job Title</label>
-                            <input type="text" id="regJobTitle" class="form-control" placeholder="e.g. Software Engineer">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-success" style="width:100%;margin-top:0.5rem;">
-                        <i class="fa-solid fa-user-check"></i> Register &amp; Provision Profile
-                    </button>
-                </form>
             </div>
         </div>
     </div>
 
-    <!-- MAIN APPLICATION WORKSPACE -->
+    <!-- MAIN APP SIDEBAR -->
     <aside>
         <div class="brand-header">
             <div class="brand-icon"><i class="fa-solid fa-bolt"></i></div>
@@ -1164,7 +938,7 @@ def index_page():
         </div>
 
         <div class="nav-group">
-            <div class="nav-label">Navigation</div>
+            <div class="nav-label">Workspace</div>
             <a class="nav-item active" onclick="switchTab('dashboard')">
                 <i class="fa-solid fa-chart-pie"></i>
                 <span>Dashboard</span>
@@ -1180,12 +954,11 @@ def index_page():
             </a>
             <a class="nav-item" onclick="switchTab('employees')">
                 <i class="fa-solid fa-users"></i>
-                <span>Directory</span>
+                <span>Employee Directory</span>
             </a>
             <a class="nav-item" onclick="switchTab('salary')">
                 <i class="fa-solid fa-wallet"></i>
                 <span>Compensation</span>
-                <span class="rbac-tag" id="salaryRbacTag">HR Admin</span>
             </a>
             <a class="nav-item" onclick="switchTab('profile')">
                 <i class="fa-solid fa-user-gear"></i>
@@ -1198,11 +971,12 @@ def index_page():
                 <i class="fa-solid fa-arrow-right-arrow-left"></i> Switch Account
             </button>
             <button class="btn btn-danger" style="width:100%;font-size:0.8rem;padding:0.5rem;" onclick="handleLogout()">
-                <i class="fa-solid fa-power-off"></i> Logout
+                <i class="fa-solid fa-power-off"></i> Sign Out
             </button>
         </div>
     </aside>
 
+    <!-- MAIN VIEW -->
     <main>
         <header>
             <div class="header-title">
@@ -1218,6 +992,11 @@ def index_page():
                     <div class="status-dot"></div>
                     <span id="headerStatusText">Checked In</span>
                 </div>
+
+                <!-- HR ONLY: PROVISION NEW EMPLOYEE BUTTON -->
+                <button class="btn btn-success" id="hrCreateEmpHeaderBtn" style="font-size:0.82rem;padding:0.45rem 0.9rem;" onclick="openCreateEmpModal()">
+                    <i class="fa-solid fa-user-plus"></i> Create Employee Email ID
+                </button>
 
                 <div class="btn btn-secondary" style="padding:0.4rem 0.8rem;font-size:0.85rem;border-radius:9999px;" onclick="openAuthModal()">
                     <i class="fa-solid fa-circle-user" style="color:var(--primary-light);"></i>
@@ -1248,13 +1027,12 @@ def index_page():
 
             <!-- Tab: Dashboard -->
             <div id="tab-dashboard" class="tab-pane">
-                <!-- RBAC Notice Bar -->
                 <div class="rbac-notice" id="rbacNoticeBar">
                     <i class="fa-solid fa-lock"></i>
-                    <span id="rbacNoticeText">RBAC Active: You have Full HR Management privileges (ir.rule: dayflow_leave_rule_officer).</span>
+                    <span id="rbacNoticeText">RBAC Active: You have Full HR Management privileges.</span>
                 </div>
 
-                <!-- Admin Metrics (Visible only to HR Officers / Admins) -->
+                <!-- Admin Metrics -->
                 <div class="metrics-grid" id="adminMetricsGrid">
                     <div class="metric-card">
                         <div class="metric-header">
@@ -1274,7 +1052,7 @@ def index_page():
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-title">On Approved Leave</span>
+                            <span class="metric-title">On Leave</span>
                             <div class="metric-icon icon-yellow"><i class="fa-solid fa-umbrella-beach"></i></div>
                         </div>
                         <div class="metric-value" id="mOnLeave">1</div>
@@ -1282,7 +1060,7 @@ def index_page():
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
-                            <span class="metric-title">Pending / Absent</span>
+                            <span class="metric-title">Absent / Pending</span>
                             <div class="metric-icon icon-red"><i class="fa-solid fa-user-xmark"></i></div>
                         </div>
                         <div class="metric-value" id="mAbsent">1</div>
@@ -1290,7 +1068,7 @@ def index_page():
                     </div>
                 </div>
 
-                <!-- Pending Approvals & Profile Summary -->
+                <!-- Approvals & Profile -->
                 <div class="grid-2" style="margin-top: 1.5rem;">
                     <div class="card" id="pendingApprovalsCard">
                         <div class="card-header">
@@ -1319,7 +1097,6 @@ def index_page():
                         </div>
                     </div>
 
-                    <!-- Profile Snapshot -->
                     <div class="card">
                         <div class="card-header">
                             <div class="card-title">
@@ -1401,6 +1178,9 @@ def index_page():
                             <i class="fa-solid fa-address-book" style="color:var(--primary-light);"></i>
                             Employee Directory
                         </div>
+                        <button class="btn btn-success" id="hrAddEmpBtnTab" onclick="openCreateEmpModal()">
+                            <i class="fa-solid fa-user-plus"></i> Create Employee Email ID
+                        </button>
                     </div>
                     <div class="card-body" style="padding:0;">
                         <table>
@@ -1410,8 +1190,8 @@ def index_page():
                                     <th>Name</th>
                                     <th>Job Title</th>
                                     <th>Department</th>
-                                    <th>Email</th>
-                                    <th>City</th>
+                                    <th>Official Email ID</th>
+                                    <th>Location</th>
                                     <th>Status</th>
                                 </tr>
                             </thead>
@@ -1440,7 +1220,7 @@ def index_page():
                                     <th>Structure</th>
                                     <th>Bank Name</th>
                                     <th>Account Number</th>
-                                    <th id="salaryActionTh">Action</th>
+                                    <th>Action</th>
                                 </tr>
                             </thead>
                             <tbody id="salaryTable"></tbody>
@@ -1499,6 +1279,81 @@ def index_page():
 
         </div>
     </main>
+
+    <!-- HR MODAL: CREATE EMPLOYEE EMAIL ID & ACCOUNT -->
+    <div id="createEmpModal" class="modal-overlay">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 style="font-size:1.15rem;font-weight:700;display:flex;align-items:center;gap:0.5rem;">
+                    <i class="fa-solid fa-user-plus" style="color:var(--success);"></i>
+                    Create New Employee &amp; Email ID
+                </h3>
+                <i class="fa-solid fa-xmark" style="cursor:pointer;font-size:1.2rem;" onclick="closeCreateEmpModal()"></i>
+            </div>
+            <div class="modal-body">
+                <form id="createEmpForm" onsubmit="handleHRCreateEmployee(event)">
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                        <div class="form-group">
+                            <label>Employee Full Name *</label>
+                            <input type="text" id="newEmpName" class="form-control" placeholder="e.g. Kavitha Murugan" oninput="autoSuggestEmail(this.value)" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Assigned Official Email ID *</label>
+                            <input type="email" id="newEmpEmail" class="form-control" placeholder="kavitha.m@dayflow.demo" required>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                        <div class="form-group">
+                            <label>Initial Login Password *</label>
+                            <input type="text" id="newEmpPassword" class="form-control" value="dayflow123" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Security Access Role *</label>
+                            <select id="newEmpRole" class="form-control">
+                                <option value="employee">Employee (Self-Service)</option>
+                                <option value="hr_officer">HR Director / Administrator</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                        <div class="form-group">
+                            <label>Department *</label>
+                            <select id="newEmpDept" class="form-control">
+                                <option value="Engineering">Engineering</option>
+                                <option value="Human Resources">Human Resources</option>
+                                <option value="Marketing & Growth">Marketing & Growth</option>
+                                <option value="Operations">Operations</option>
+                                <option value="Finance & Accounts">Finance & Accounts</option>
+                                <option value="Quality Assurance">Quality Assurance</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Job Title *</label>
+                            <input type="text" id="newEmpJobTitle" class="form-control" placeholder="e.g. Frontend Developer" required>
+                        </div>
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+                        <div class="form-group">
+                            <label>Monthly Salary ($)</label>
+                            <input type="number" id="newEmpSalary" class="form-control" value="7000" min="1000" step="100">
+                        </div>
+                        <div class="form-group">
+                            <label>Custom Dayflow ID (Optional)</label>
+                            <input type="text" id="newEmpDayflowId" class="form-control" placeholder="Auto-generated (e.g. DF-1005)">
+                        </div>
+                    </div>
+
+                    <div class="modal-footer" style="padding-right:0;padding-left:0;border:none;margin-top:1rem;">
+                        <button type="button" class="btn btn-secondary" onclick="closeCreateEmpModal()">Cancel</button>
+                        <button type="submit" class="btn btn-success"><i class="fa-solid fa-user-check"></i> Provision Employee Account</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
 
     <!-- Leave Request Modal -->
     <div id="leaveModal" class="modal-overlay">
@@ -1559,26 +1414,20 @@ def index_page():
             setTimeout(() => { toast.style.display = 'none'; }, 3500);
         }
 
-        function switchAuthTab(tab) {
-            if (tab === 'login') {
-                document.getElementById('loginForm').style.display = 'block';
-                document.getElementById('registerForm').style.display = 'none';
-                document.getElementById('tabBtnLogin').classList.add('active');
-                document.getElementById('tabBtnRegister').classList.remove('active');
-            } else {
-                document.getElementById('loginForm').style.display = 'none';
-                document.getElementById('registerForm').style.display = 'block';
-                document.getElementById('tabBtnLogin').classList.remove('active');
-                document.getElementById('tabBtnRegister').classList.add('active');
-            }
+        function openAuthModal() { document.getElementById('authOverlay').style.display = 'flex'; }
+        function closeAuthModal() { document.getElementById('authOverlay').style.display = 'none'; }
+
+        function openCreateEmpModal() {
+            document.getElementById('createEmpModal').style.display = 'flex';
+        }
+        function closeCreateEmpModal() {
+            document.getElementById('createEmpModal').style.display = 'none';
         }
 
-        function openAuthModal() {
-            document.getElementById('authOverlay').style.display = 'flex';
-        }
-
-        function closeAuthModal() {
-            document.getElementById('authOverlay').style.display = 'none';
+        function autoSuggestEmail(name) {
+            if (!name) return;
+            const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, '.');
+            document.getElementById('newEmpEmail').value = `${cleaned}@dayflow.demo`;
         }
 
         function quickFill(email, pw) {
@@ -1609,29 +1458,32 @@ def index_page():
             }
         }
 
-        async function handleRegister(e) {
+        async function handleHRCreateEmployee(e) {
             e.preventDefault();
             const payload = {
-                name: document.getElementById('regName').value,
-                email: document.getElementById('regEmail').value,
-                password: document.getElementById('regPassword').value,
-                role: document.getElementById('regRole').value,
-                department: document.getElementById('regDepartment').value,
-                job_title: document.getElementById('regJobTitle').value || 'Team Member'
+                name: document.getElementById('newEmpName').value,
+                email: document.getElementById('newEmpEmail').value,
+                password: document.getElementById('newEmpPassword').value,
+                role: document.getElementById('newEmpRole').value,
+                department: document.getElementById('newEmpDept').value,
+                job_title: document.getElementById('newEmpJobTitle').value,
+                salary_amount: parseFloat(document.getElementById('newEmpSalary').value) || 6500.0,
+                dayflow_emp_id: document.getElementById('newEmpDayflowId').value || null
             };
+
             try {
-                const res = await fetch('/api/auth/register', {
+                const res = await fetch('/api/admin/create_employee', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${sessionToken}` },
                     body: JSON.stringify(payload)
                 });
                 const data = await res.json();
-                if (!res.ok) throw new Error(data.detail || 'Registration failed');
+                if (!res.ok) throw new Error(data.detail || 'Failed to create employee');
 
-                sessionToken = data.token;
-                localStorage.setItem('dayflow_token', sessionToken);
-                closeAuthModal();
+                closeCreateEmpModal();
                 showToast(data.message);
+                alert(`✅ Employee Created Successfully!\n\nEmail ID: ${payload.email}\nPassword: ${payload.password}\nName: ${payload.name}\nDepartment: ${payload.department}\n\nThe employee can now sign in using these credentials.`);
+                document.getElementById('createEmpForm').reset();
                 fetchState();
             } catch (err) {
                 alert(err.message);
@@ -1677,7 +1529,7 @@ def index_page():
         }
 
         async function approveLeave(id) {
-            const comment = prompt("Enter manager approval comment:", "Approved by HR Director.");
+            const comment = prompt("Enter manager approval feedback:", "Approved by HR Director.");
             if (comment === null) return;
             const res = await fetch('/api/approve_leave', {
                 method: 'POST',
@@ -1720,7 +1572,7 @@ def index_page():
             });
             if (res.ok) {
                 closeLeaveModal();
-                showToast("Leave request submitted successfully!");
+                showToast("Leave request submitted to HR!");
                 fetchState();
             }
         }
@@ -1758,7 +1610,7 @@ def index_page():
                 'dashboard': [isAdm ? 'HR Administrator Dashboard' : 'Employee Workspace', isAdm ? 'Organization overview and RBAC approval queue' : 'Your personal workday schedule & attendance'],
                 'attendance': [isAdm ? 'All Staff Attendance Logs' : 'My Attendance History', 'Daily check-in logs and status classification'],
                 'leaves': ['Time-Off & Leave Management', isAdm ? 'All leave applications and company-wide requests' : 'Your submitted leave requests and balances'],
-                'employees': ['Employee Directory', 'Organization team members and contact status'],
+                'employees': ['Employee Directory', 'Organization team members and official email IDs'],
                 'salary': ['Compensation & Banking', isAdm ? 'Full company salary administration' : 'Your confidential compensation record'],
                 'profile': ['My Profile', 'Manage personal and emergency contact details']
             };
@@ -1775,9 +1627,7 @@ def index_page():
             document.getElementById('leaveModal').style.display = 'flex';
         }
 
-        function closeLeaveModal() {
-            document.getElementById('leaveModal').style.display = 'none';
-        }
+        function closeLeaveModal() { document.getElementById('leaveModal').style.display = 'none'; }
 
         function render() {
             if (!appState) return;
@@ -1786,29 +1636,30 @@ def index_page():
             const m = appState.metrics;
             const isAdm = appState.is_admin;
 
-            // Update Header & User Badge
             document.getElementById('headerUserName').innerText = u.name;
             const roleBadge = document.getElementById('headerRoleBadge');
-            const salaryTag = document.getElementById('salaryRbacTag');
             const rbacNotice = document.getElementById('rbacNoticeText');
+            const hrHeaderBtn = document.getElementById('hrCreateEmpHeaderBtn');
+            const hrAddEmpBtnTab = document.getElementById('hrAddEmpBtnTab');
 
             if (isAdm) {
                 roleBadge.className = 'role-pill admin';
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
-                salaryTag.innerText = 'HR Full Access';
-                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full permissions across all staff records and approvals (<code>base.group_hr_manager</code>).`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> You have full organizational management and employee email provisioning privileges.`;
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
+                hrHeaderBtn.style.display = 'inline-flex';
+                if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'inline-flex';
             } else {
                 roleBadge.className = 'role-pill employee';
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
-                salaryTag.innerText = 'Self View';
-                rbacNotice.innerHTML = `<strong>RBAC Role: Internal User (${emp ? emp.job_title : 'Employee'}).</strong> Self-isolated data scope (<code>base.group_user</code>). Only personal logs are visible.`;
+                rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope. Only your personal records are visible.`;
                 document.getElementById('adminMetricsGrid').style.display = 'none';
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
+                hrHeaderBtn.style.display = 'none';
+                if (hrAddEmpBtnTab) hrAddEmpBtnTab.style.display = 'none';
             }
 
-            // Attendance Chip & Button
             const isCheckedIn = emp && emp.attendance_state === 'checked_in';
             const chip = document.getElementById('headerStatusChip');
             const chipText = document.getElementById('headerStatusText');
@@ -1830,14 +1681,12 @@ def index_page():
             document.getElementById('greetingText').innerText = `Good day, ${u.name}!`;
             document.getElementById('workedTimer').innerText = emp ? `${emp.worked_hours.toFixed(1)} hrs` : '0.0 hrs';
 
-            // Metrics
             document.getElementById('mTotalEmps').innerText = m.total_employees;
             document.getElementById('mPresentEmps').innerText = m.present_today;
             document.getElementById('mPresentPct').innerText = `${m.attendance_rate}% active attendance`;
             document.getElementById('mOnLeave').innerText = m.on_leave_today;
             document.getElementById('mAbsent').innerText = m.absent_today;
 
-            // Pending Leaves Badge
             const pendingBadge = document.getElementById('pendingBadge');
             if (isAdm && appState.pending_leaves.length > 0) {
                 pendingBadge.style.display = 'inline-block';
@@ -1846,7 +1695,6 @@ def index_page():
                 pendingBadge.style.display = 'none';
             }
 
-            // Pending Leaves Table
             const ptBody = document.getElementById('pendingLeavesTable');
             if (appState.pending_leaves.length === 0) {
                 ptBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No pending leave approvals in queue! 🎉</td></tr>`;
@@ -1868,20 +1716,18 @@ def index_page():
                 `).join('');
             }
 
-            // Profile Summary List
             const pList = document.getElementById('profileSummaryList');
             if (emp) {
                 pList.innerHTML = `
                     <div class="info-item"><span class="info-label">Dayflow ID</span><span class="info-val" style="font-family:'JetBrains Mono';color:var(--primary-light);">${emp.dayflow_emp_id}</span></div>
                     <div class="info-item"><span class="info-label">Job Title</span><span class="info-val">${emp.job_title}</span></div>
                     <div class="info-item"><span class="info-label">Department</span><span class="info-val">${emp.department}</span></div>
-                    <div class="info-item"><span class="info-label">Work Phone</span><span class="info-val">${emp.work_phone}</span></div>
+                    <div class="info-item"><span class="info-label">Official Email</span><span class="info-val">${emp.work_email}</span></div>
                     <div class="info-item"><span class="info-label">Location</span><span class="info-val">${emp.private_city}</span></div>
                     <div class="info-item"><span class="info-label">Compensation</span><span class="info-val" style="color:var(--success);">$${emp.salary_amount.toLocaleString()}.00/mo</span></div>
                 `;
             }
 
-            // Attendance Logs Table
             const attTable = document.getElementById('attendanceLogsTable');
             attTable.innerHTML = appState.attendance_logs.map(a => `
                 <tr>
@@ -1895,7 +1741,6 @@ def index_page():
                 </tr>
             `).join('');
 
-            // All Leaves Table
             const allLeavesTable = document.getElementById('allLeavesTable');
             allLeavesTable.innerHTML = appState.all_leaves.map(l => {
                 let badgeCls = 'badge-pending';
@@ -1914,7 +1759,6 @@ def index_page():
                 `;
             }).join('');
 
-            // Employees Directory Table
             const empsTable = document.getElementById('employeesTable');
             empsTable.innerHTML = appState.all_employees.map(e => `
                 <tr>
@@ -1922,13 +1766,12 @@ def index_page():
                     <td><strong>${e.name}</strong></td>
                     <td>${e.job_title}</td>
                     <td>${e.department}</td>
-                    <td><a href="mailto:${e.work_email}" style="color:var(--text-muted);text-decoration:none;">${e.work_email}</a></td>
+                    <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
                     <td>${e.private_city}</td>
                     <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
                 </tr>
             `).join('');
 
-            // Salary Table (RBAC enforced)
             const salTable = document.getElementById('salaryTable');
             salTable.innerHTML = appState.salary_records.map(e => `
                 <tr>
@@ -1944,7 +1787,6 @@ def index_page():
                 </tr>
             `).join('');
 
-            // Fill profile edit form with current employee data
             if (emp) {
                 document.getElementById('profWorkPhone').value = emp.work_phone || '';
                 document.getElementById('profMobilePhone').value = emp.mobile_phone || '';
@@ -1978,7 +1820,6 @@ def index_page():
             fetchState();
         }
 
-        // Initialize state
         fetchState();
     </script>
 </body>
@@ -1988,11 +1829,11 @@ def index_page():
 if __name__ == "__main__":
     port = 8069
     print("===============================================================")
-    print(f">> Dayflow HRMS Server with RBAC is starting on http://127.0.0.1:{port}")
-    print(">> RBAC Features:")
-    print("   * Authentication: User Registration, Login & Session Management")
-    print("   * Two-Tier RBAC: HR Director (Admin) vs Internal Employee")
-    print("   * Data Isolation: Self-isolated records vs Org-wide access")
-    print("   * Time-off approval queues & Compensation security layers")
+    print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
+    print(">> Features:")
+    print("   * Clean Employee / HR Login Portal")
+    print("   * HR Portal: Create Employee Accounts & Email IDs")
+    print("   * RBAC Security: HR Director (Admin) vs Internal Employee")
+    print("   * Real-time Attendance, Leaves & Compensation Management")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
