@@ -3,12 +3,9 @@
 Dayflow HRMS - Master Administrator & Strict RBAC with File-Based Persistent Storage
 Master HR Administrator: Sathiya Moorthy (sathiyamoorthy@dayflow.demo / sathiya)
 
-Features:
-- Smart Duplicate Email Handling:
-  * Automatically suggests unique email handles (e.g. sathiya2@dayflow.demo).
-  * Allows 1-click update/overwrite of existing employee passwords and profiles if needed.
-- Full JSON File Persistence (`dayflow_db.json`).
-- Strict RBAC: Employees see only Dashboard and My Profile.
+Clean Login:
+- Removed 1-Click Quick Sign In demo accounts section from login modal.
+- Standard secure email and password login.
 """
 
 import os
@@ -194,21 +191,6 @@ def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
 
 # ================= PUBLIC & AUTH ENDPOINTS =================
 
-@app.get("/api/auth/demo_users")
-def get_demo_users():
-    """Returns list of registered users for quick login modal."""
-    return [
-        {
-            "name": u["name"],
-            "email": u["email"],
-            "role": "admin" if u["email"] == MASTER_EMAIL else "employee",
-            "role_label": "HR Director / Administrator" if u["email"] == MASTER_EMAIL else "Employee (Self-Service)",
-            "is_admin": (u["email"] == MASTER_EMAIL),
-            "password": u.get("password_plain", MASTER_PASS_PLAIN)
-        }
-        for u in DB["users"].values()
-    ]
-
 @app.post("/api/auth/login")
 def login_user(payload: LoginPayload):
     email = payload.email.strip().lower()
@@ -258,7 +240,7 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
         if not payload.overwrite:
             raise HTTPException(
                 status_code=400, 
-                detail=f"EXISTS: An employee with Email ID '{email}' already exists in the system."
+                detail=f"An employee with Email ID '{email}' already exists in the system."
             )
         
         # Overwrite/Update existing user & employee details
@@ -752,7 +734,7 @@ def index_page():
         .auth-card {
             background: rgba(30, 41, 59, 0.95); backdrop-filter: blur(16px);
             border: 1px solid rgba(99, 102, 241, 0.3); border-radius: 20px;
-            width: 100%; max-width: 520px; box-shadow: var(--shadow-lg), var(--shadow-glow);
+            width: 100%; max-width: 440px; box-shadow: var(--shadow-lg), var(--shadow-glow);
             overflow: hidden; animation: fadeIn 0.3s ease;
         }
 
@@ -761,18 +743,6 @@ def index_page():
         .auth-header { padding: 2rem 2rem 1.25rem; text-align: center; border-bottom: 1px solid var(--border); }
         .auth-brand { display: inline-flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
         .auth-body { padding: 1.75rem 2rem; max-height: 80vh; overflow-y: auto; }
-
-        .demo-pills { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px dashed var(--border); }
-        .demo-pills-title { font-size: 0.72rem; text-transform: uppercase; font-weight: 700; color: var(--text-muted); margin-bottom: 0.6rem; letter-spacing: 0.05em; display: flex; justify-content: space-between; align-items: center; }
-        .pill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; max-height: 200px; overflow-y: auto; padding-right: 2px; }
-
-        .demo-btn {
-            background: #0f172a; border: 1px solid var(--border); border-radius: 8px;
-            padding: 0.5rem 0.75rem; color: #cbd5e1; font-size: 0.75rem; font-weight: 600;
-            cursor: pointer; text-align: left; transition: all 0.2s ease; display: flex; flex-direction: column; gap: 0.15rem;
-        }
-        .demo-btn:hover { border-color: var(--primary); background: rgba(99, 102, 241, 0.1); color: white; }
-        .demo-btn span { font-size: 0.65rem; color: var(--primary-light); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
         /* Sidebar */
         aside {
@@ -942,7 +912,7 @@ def index_page():
 </head>
 <body>
 
-    <!-- AUTHENTICATION LOGIN OVERLAY -->
+    <!-- AUTHENTICATION LOGIN OVERLAY (Clean email & password only) -->
     <div id="authOverlay">
         <div class="auth-card">
             <div class="auth-header">
@@ -966,18 +936,9 @@ def index_page():
                         <label>Password</label>
                         <input type="password" id="loginPassword" class="form-control" placeholder="sathiya" value="sathiya" required>
                     </div>
-                    <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.5rem;">
+                    <button type="submit" class="btn btn-primary" style="width:100%;margin-top:0.75rem;">
                         <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign In to HRMS
                     </button>
-
-                    <!-- Quick Demo Accounts -->
-                    <div class="demo-pills">
-                        <div class="demo-pills-title">
-                            <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In</span>
-                            <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">1 account</span>
-                        </div>
-                        <div class="pill-grid" id="quickUsersList"></div>
-                    </div>
                 </form>
             </div>
         </div>
@@ -1605,10 +1566,7 @@ def index_page():
                     </div>
                 </div>
 
-                <div style="margin-top:1.5rem;display:flex;gap:0.75rem;">
-                    <button class="btn btn-primary" style="flex:1;" onclick="testLoginAsCreated()">
-                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Sign in as this Employee
-                    </button>
+                <div style="margin-top:1.5rem;display:flex;justify-content:flex-end;">
                     <button class="btn btn-secondary" onclick="closeCredentialsModal()">Done</button>
                 </div>
             </div>
@@ -1682,30 +1640,9 @@ def index_page():
         }
 
         function openAuthModal() {
-            populateQuickUsers();
             document.getElementById('authOverlay').style.display = 'flex';
         }
         function closeAuthModal() { document.getElementById('authOverlay').style.display = 'none'; }
-
-        async function populateQuickUsers() {
-            try {
-                const res = await fetch('/api/auth/demo_users');
-                const users = await res.json();
-                const container = document.getElementById('quickUsersList');
-                const badge = document.getElementById('usersCountBadge');
-                if (badge) badge.innerText = `${users.length} account${users.length === 1 ? '' : 's'}`;
-                if (!container) return;
-
-                container.innerHTML = users.map(u => `
-                    <button type="button" class="demo-btn" onclick="quickFill('${u.email}', '${u.password}')">
-                        <strong>${u.name}</strong>
-                        <span>${u.is_admin ? 'HR Admin' : 'Employee'}</span>
-                    </button>
-                `).join('');
-            } catch (err) {
-                console.error("populateQuickUsers error:", err);
-            }
-        }
 
         function openCreateEmpModal() {
             document.getElementById('createEmpModal').style.display = 'flex';
@@ -1720,18 +1657,10 @@ def index_page():
             document.getElementById('succEmpEmail').innerText = creds.email;
             document.getElementById('succEmpPassword').innerText = creds.password;
             document.getElementById('credentialsSuccessModal').style.display = 'flex';
-            populateQuickUsers();
         }
 
         function closeCredentialsModal() {
             document.getElementById('credentialsSuccessModal').style.display = 'none';
-        }
-
-        function testLoginAsCreated() {
-            if (!lastCreatedCredentials) return;
-            closeCredentialsModal();
-            quickFill(lastCreatedCredentials.email, lastCreatedCredentials.password);
-            openAuthModal();
         }
 
         function generateStrongPassword() {
@@ -1761,7 +1690,6 @@ def index_page():
             const cleaned = name.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
             if (!cleaned) return;
             
-            // Check existing users to suggest unique handle
             const existingEmails = appState && appState.all_users ? appState.all_users.map(u => u.email.toLowerCase()) : [];
             let cand = `${cleaned}@dayflow.demo`;
             if (existingEmails.includes(cand)) {
@@ -1772,11 +1700,6 @@ def index_page():
                 cand = `${cleaned}${seq}@dayflow.demo`;
             }
             document.getElementById('newEmpEmail').value = cand;
-        }
-
-        function quickFill(email, pw) {
-            document.getElementById('loginEmail').value = email;
-            document.getElementById('loginPassword').value = pw;
         }
 
         async function handleLogin(e) {
@@ -1834,7 +1757,6 @@ def index_page():
                         if (doUpdate) {
                             return handleHRCreateEmployee(null, true);
                         } else {
-                            // Suggest next available email handle
                             autoSuggestEmail(nameVal + 'new');
                             return;
                         }
@@ -1900,7 +1822,6 @@ def index_page():
                 }
                 showToast(data.message);
                 await fetchState();
-                populateQuickUsers();
             } catch (err) {
                 console.error("deleteEmployee error:", err);
                 showToast("Deleted employee successfully");
@@ -1933,7 +1854,6 @@ def index_page():
             if (res.ok) {
                 showToast("Database cleared and reset to fresh state!");
                 await fetchState();
-                populateQuickUsers();
             }
         }
 
@@ -2392,7 +2312,6 @@ def index_page():
             await fetchState();
         }
 
-        populateQuickUsers();
         fetchState();
     </script>
 </body>
@@ -2406,6 +2325,6 @@ if __name__ == "__main__":
     print(">> Features:")
     print(f"   * Master HR Administrator: {MASTER_EMAIL} (Full Access)")
     print(f"   * Permanent Storage File: {DB_FILE}")
-    print("   * Smart Email auto-suggestion & 1-click update on existing emails")
+    print("   * Clean, secure direct login (No quick accounts list)")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
