@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Dayflow HRMS - Authentication, RBAC & Role-Specific Dashboards
-Features Dynamic User Discovery, Employee Personal Dashboard, HR Organization Dashboard,
-Live Attendance Tracking, and Credential Provisioning.
+Dayflow HRMS - Clean Database with Role-Based Access Controls
+Clean baseline: Single HR Master Admin account (alex.morgan@dayflow.demo / dayflow123)
+All previous test entries, test employees, demo leaves, and dummy attendance logs deleted.
 """
 
 import os
@@ -25,288 +25,57 @@ def hash_pw(password: str) -> str:
 
 DEFAULT_PASS = hash_pw("dayflow123")
 
-# Time helpers
-now = datetime.now()
-today_str = now.strftime("%Y-%m-%d")
-yesterday_str = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-two_days_ago_str = (now - timedelta(days=2)).strftime("%Y-%m-%d")
-three_days_ago_str = (now - timedelta(days=3)).strftime("%Y-%m-%d")
+def get_initial_db():
+    return {
+        "users": {
+            "alex.morgan@dayflow.demo": {
+                "id": 1,
+                "login": "alex.morgan@dayflow.demo",
+                "password_hash": DEFAULT_PASS,
+                "password_plain": "dayflow123",
+                "name": "Alex Morgan",
+                "email": "alex.morgan@dayflow.demo",
+                "role": "admin",
+                "role_label": "HR Director / Administrator",
+                "is_admin": True,
+                "is_officer": True,
+                "employee_id": 1,
+                "created_at": "2026-01-01T09:00:00"
+            }
+        },
+        "employees": [
+            {
+                "id": 1,
+                "user_id": 1,
+                "name": "Alex Morgan",
+                "dayflow_emp_id": "DF-1001",
+                "job_title": "HR Director & Administrator",
+                "department": "Human Resources",
+                "work_email": "alex.morgan@dayflow.demo",
+                "work_phone": "+1 555-0101",
+                "mobile_phone": "+1 555-0102",
+                "private_city": "San Francisco",
+                "salary_amount": 8500.0,
+                "salary_type": "Monthly Fixed",
+                "bank_name": "First Republic Bank",
+                "bank_account_no": "US89 •••• 3000",
+                "emergency_contact_name": "Sarah Morgan",
+                "emergency_contact_relation": "Spouse",
+                "emergency_contact_phone": "+1 555-0109",
+                "attendance_state": "checked_out",
+                "last_check_in": None,
+                "worked_hours": 0.0
+            }
+        ],
+        "leaves": [],
+        "attendance_logs": [],
+        "sessions": {
+            "session-alex-admin-token": "alex.morgan@dayflow.demo"
+        }
+    }
 
-DB = {
-    "users": {
-        "alex.morgan@dayflow.demo": {
-            "id": 1,
-            "login": "alex.morgan@dayflow.demo",
-            "password_hash": DEFAULT_PASS,
-            "password_plain": "dayflow123",
-            "name": "Alex Morgan",
-            "email": "alex.morgan@dayflow.demo",
-            "role": "admin",
-            "role_label": "HR Director / Administrator",
-            "is_admin": True,
-            "is_officer": True,
-            "employee_id": 1,
-            "created_at": "2026-01-01T09:00:00"
-        },
-        "jordan.smith@dayflow.demo": {
-            "id": 2,
-            "login": "jordan.smith@dayflow.demo",
-            "password_hash": DEFAULT_PASS,
-            "password_plain": "dayflow123",
-            "name": "Jordan Smith",
-            "email": "jordan.smith@dayflow.demo",
-            "role": "employee",
-            "role_label": "Senior Software Engineer",
-            "is_admin": False,
-            "is_officer": False,
-            "employee_id": 2,
-            "created_at": "2026-01-15T09:00:00"
-        },
-        "taylor.reed@dayflow.demo": {
-            "id": 3,
-            "login": "taylor.reed@dayflow.demo",
-            "password_hash": DEFAULT_PASS,
-            "password_plain": "dayflow123",
-            "name": "Taylor Reed",
-            "email": "taylor.reed@dayflow.demo",
-            "role": "employee",
-            "role_label": "Growth Marketing Lead",
-            "is_admin": False,
-            "is_officer": False,
-            "employee_id": 3,
-            "created_at": "2026-02-01T09:00:00"
-        },
-        "casey.patel@dayflow.demo": {
-            "id": 4,
-            "login": "casey.patel@dayflow.demo",
-            "password_hash": DEFAULT_PASS,
-            "password_plain": "dayflow123",
-            "name": "Casey Patel",
-            "email": "casey.patel@dayflow.demo",
-            "role": "employee",
-            "role_label": "Operations Specialist",
-            "is_admin": False,
-            "is_officer": False,
-            "employee_id": 4,
-            "created_at": "2026-02-10T09:00:00"
-        }
-    },
-    "employees": [
-        {
-            "id": 1,
-            "user_id": 1,
-            "name": "Alex Morgan",
-            "dayflow_emp_id": "DF-1001",
-            "job_title": "HR Director & People Lead",
-            "department": "Human Resources",
-            "work_email": "alex.morgan@dayflow.demo",
-            "work_phone": "+1 555-0101",
-            "mobile_phone": "+1 555-0102",
-            "private_city": "San Francisco",
-            "salary_amount": 8500.0,
-            "salary_type": "Monthly Fixed",
-            "bank_name": "First Republic Bank",
-            "bank_account_no": "US89 •••• 3000",
-            "emergency_contact_name": "Sarah Morgan",
-            "emergency_contact_relation": "Spouse",
-            "emergency_contact_phone": "+1 555-0109",
-            "attendance_state": "checked_in",
-            "last_check_in": (now - timedelta(hours=3, minutes=24)).strftime("%Y-%m-%d %H:%M"),
-            "worked_hours": 3.4
-        },
-        {
-            "id": 2,
-            "user_id": 2,
-            "name": "Jordan Smith",
-            "dayflow_emp_id": "DF-1002",
-            "job_title": "Senior Software Engineer",
-            "department": "Engineering",
-            "work_email": "jordan.smith@dayflow.demo",
-            "work_phone": "+1 555-0201",
-            "mobile_phone": "+1 555-0202",
-            "private_city": "Austin",
-            "salary_amount": 9200.0,
-            "salary_type": "Monthly Fixed",
-            "bank_name": "Silicon Valley Bank",
-            "bank_account_no": "US44 •••• 0002",
-            "emergency_contact_name": "David Smith",
-            "emergency_contact_relation": "Parent",
-            "emergency_contact_phone": "+1 555-0209",
-            "attendance_state": "checked_in",
-            "last_check_in": (now - timedelta(hours=2, minutes=15)).strftime("%Y-%m-%d %H:%M"),
-            "worked_hours": 2.25
-        },
-        {
-            "id": 3,
-            "user_id": 3,
-            "name": "Taylor Reed",
-            "dayflow_emp_id": "DF-1003",
-            "job_title": "Growth Marketing Lead",
-            "department": "Marketing & Growth",
-            "work_email": "taylor.reed@dayflow.demo",
-            "work_phone": "+1 555-0301",
-            "mobile_phone": "+1 555-0302",
-            "private_city": "New York",
-            "salary_amount": 7800.0,
-            "salary_type": "Monthly Fixed",
-            "bank_name": "Chase Bank",
-            "bank_account_no": "US12 •••• 4591",
-            "emergency_contact_name": "Emma Reed",
-            "emergency_contact_relation": "Sibling",
-            "emergency_contact_phone": "+1 555-0309",
-            "attendance_state": "checked_out",
-            "last_check_in": None,
-            "worked_hours": 0.0
-        },
-        {
-            "id": 4,
-            "user_id": 4,
-            "name": "Casey Patel",
-            "dayflow_emp_id": "DF-1004",
-            "job_title": "Operations Specialist",
-            "department": "Operations",
-            "work_email": "casey.patel@dayflow.demo",
-            "work_phone": "+1 555-0401",
-            "mobile_phone": "+1 555-0402",
-            "private_city": "Chicago",
-            "salary_amount": 7400.0,
-            "salary_type": "Monthly Fixed",
-            "bank_name": "Bank of America",
-            "bank_account_no": "US33 •••• 7712",
-            "emergency_contact_name": "Rohan Patel",
-            "emergency_contact_relation": "Spouse",
-            "emergency_contact_phone": "+1 555-0409",
-            "attendance_state": "checked_out",
-            "last_check_in": None,
-            "worked_hours": 0.0
-        }
-    ],
-    "leaves": [
-        {
-            "id": 1,
-            "employee_id": 2,
-            "employee_name": "Jordan Smith",
-            "dayflow_emp_id": "DF-1002",
-            "department": "Engineering",
-            "type": "Paid Time Off (PTO)",
-            "category": "paid",
-            "date_from": (date.today() + timedelta(days=5)).strftime("%b %d, %Y"),
-            "date_to": (date.today() + timedelta(days=7)).strftime("%b %d, %Y"),
-            "number_of_days": 3,
-            "state": "confirm",
-            "state_label": "Pending Approval",
-            "remarks": "Annual family vacation trip to Rocky Mountains.",
-            "manager_comment": ""
-        },
-        {
-            "id": 2,
-            "employee_id": 3,
-            "employee_name": "Taylor Reed",
-            "dayflow_emp_id": "DF-1003",
-            "department": "Marketing & Growth",
-            "type": "Sick Leave",
-            "category": "sick",
-            "date_from": (date.today() - timedelta(days=3)).strftime("%b %d, %Y"),
-            "date_to": (date.today() - timedelta(days=2)).strftime("%b %d, %Y"),
-            "number_of_days": 2,
-            "state": "validate",
-            "state_label": "Approved",
-            "remarks": "Flu symptoms and fever. Doctor advised 2 days rest.",
-            "manager_comment": "Approved by Alex Morgan. Rest well!"
-        }
-    ],
-    "attendance_logs": [
-        {
-            "id": 1,
-            "employee_id": 1,
-            "employee_name": "Alex Morgan",
-            "dayflow_emp_id": "DF-1001",
-            "department": "Human Resources",
-            "date": today_str,
-            "check_in": f"{today_str} 08:30",
-            "check_out": "In Progress (Active)",
-            "status": "Present",
-            "worked_hours": "3.4 hrs"
-        },
-        {
-            "id": 2,
-            "employee_id": 2,
-            "employee_name": "Jordan Smith",
-            "dayflow_emp_id": "DF-1002",
-            "department": "Engineering",
-            "date": today_str,
-            "check_in": f"{today_str} 09:15",
-            "check_out": "In Progress (Active)",
-            "status": "Present",
-            "worked_hours": "2.2 hrs"
-        },
-        {
-            "id": 3,
-            "employee_id": 1,
-            "employee_name": "Alex Morgan",
-            "dayflow_emp_id": "DF-1001",
-            "department": "Human Resources",
-            "date": yesterday_str,
-            "check_in": f"{yesterday_str} 09:00",
-            "check_out": f"{yesterday_str} 17:30",
-            "status": "Present",
-            "worked_hours": "8.5 hrs"
-        },
-        {
-            "id": 4,
-            "employee_id": 2,
-            "employee_name": "Jordan Smith",
-            "dayflow_emp_id": "DF-1002",
-            "department": "Engineering",
-            "date": yesterday_str,
-            "check_in": f"{yesterday_str} 09:05",
-            "check_out": f"{yesterday_str} 18:00",
-            "status": "Present",
-            "worked_hours": "8.9 hrs"
-        },
-        {
-            "id": 5,
-            "employee_id": 4,
-            "employee_name": "Casey Patel",
-            "dayflow_emp_id": "DF-1004",
-            "department": "Operations",
-            "date": yesterday_str,
-            "check_in": f"{yesterday_str} 08:45",
-            "check_out": f"{yesterday_str} 17:15",
-            "status": "Present",
-            "worked_hours": "8.5 hrs"
-        },
-        {
-            "id": 6,
-            "employee_id": 3,
-            "employee_name": "Taylor Reed",
-            "dayflow_emp_id": "DF-1003",
-            "department": "Marketing & Growth",
-            "date": two_days_ago_str,
-            "check_in": f"{two_days_ago_str} 09:10",
-            "check_out": f"{two_days_ago_str} 13:30",
-            "status": "Half-day",
-            "worked_hours": "4.3 hrs"
-        },
-        {
-            "id": 7,
-            "employee_id": 2,
-            "employee_name": "Jordan Smith",
-            "dayflow_emp_id": "DF-1002",
-            "department": "Engineering",
-            "date": three_days_ago_str,
-            "check_in": f"{three_days_ago_str} 09:00",
-            "check_out": f"{three_days_ago_str} 17:45",
-            "status": "Present",
-            "worked_hours": "8.7 hrs"
-        }
-    ],
-    "sessions": {}
-}
-
-DEFAULT_SESSION_TOKEN = "session-alex-admin-token"
-DB["sessions"][DEFAULT_SESSION_TOKEN] = "alex.morgan@dayflow.demo"
-EMP_SEQ = 1005
+DB = get_initial_db()
+EMP_SEQ = 1002
 
 class LoginPayload(BaseModel):
     email: str
@@ -481,20 +250,6 @@ def hr_create_employee(payload: HRCreateEmployeePayload, authorization: Optional
     }
     DB["employees"].append(new_emp)
 
-    # Initial Welcome Attendance Log for the new employee
-    DB["attendance_logs"].insert(0, {
-        "id": len(DB["attendance_logs"]) + 1,
-        "employee_id": emp_id_num,
-        "employee_name": payload.name.strip(),
-        "dayflow_emp_id": dayflow_id,
-        "department": payload.department,
-        "date": today_str,
-        "check_in": f"{today_str} 09:00",
-        "check_out": f"{today_str} 17:00",
-        "status": "Present",
-        "worked_hours": "8.0 hrs"
-    })
-
     return {
         "success": True,
         "message": f"Successfully created employee profile & email ID for {payload.name} ({email}) with Dayflow ID {dayflow_id}!",
@@ -530,6 +285,17 @@ def hr_reset_password(payload: ResetPasswordPayload, authorization: Optional[str
         "new_password": payload.new_password
     }
 
+@app.post("/api/admin/reset_all_data")
+def hr_reset_all_data(authorization: Optional[str] = Header(None)):
+    global DB, EMP_SEQ
+    hr_user = get_current_user(authorization)
+    if not hr_user.get("is_admin"):
+        raise HTTPException(status_code=403, detail="RBAC Access Denied: Only Administrator can wipe database.")
+    
+    DB = get_initial_db()
+    EMP_SEQ = 1002
+    return {"success": True, "message": "All previous entries and test records have been deleted. Clean state restored!"}
+
 @app.post("/api/auth/logout")
 def logout_user(authorization: Optional[str] = Header(None)):
     if authorization:
@@ -546,7 +312,6 @@ def get_state(authorization: Optional[str] = Header(None)):
     emp = next((e for e in DB["employees"] if e["id"] == user["employee_id"] or e["work_email"] == user["email"]), None)
     is_admin = user.get("is_admin", False) or user.get("is_officer", False)
 
-    # Attendance logs: HR sees all, Employee sees their own
     if is_admin:
         attendance_logs = DB["attendance_logs"]
         all_leaves = DB["leaves"]
@@ -586,7 +351,6 @@ def get_state(authorization: Optional[str] = Header(None)):
     on_leave = len([l for l in DB["leaves"] if l["state"] == "validate" and l["number_of_days"] > 0 and "Sick" in l["type"]])
     absent_emps = max(0, total_emps - present_emps - on_leave)
 
-    # Employee personal leave balance calculation
     emp_leaves_taken = sum(l["number_of_days"] for l in all_leaves if l["state"] == "validate" and "PTO" in l["type"])
     emp_sick_taken = sum(l["number_of_days"] for l in all_leaves if l["state"] == "validate" and "Sick" in l["type"])
 
@@ -597,7 +361,6 @@ def get_state(authorization: Optional[str] = Header(None)):
         "my_pending_leaves": len([l for l in all_leaves if l["state"] == "confirm"])
     }
 
-    # All registered accounts for quick-switch list
     all_users_summary = [
         {
             "name": u["name"],
@@ -642,9 +405,7 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
     cur_date_str = cur_time.strftime("%Y-%m-%d")
 
     if emp["attendance_state"] == "checked_in":
-        # Check out
         emp["attendance_state"] = "checked_out"
-        
         active_log = next((a for a in DB["attendance_logs"] if (a.get("employee_id") == emp["id"] or a.get("dayflow_emp_id") == emp["dayflow_emp_id"]) and "In Progress" in str(a.get("check_out", ""))), None)
         if active_log:
             active_log["check_out"] = cur_time_str
@@ -665,7 +426,6 @@ def toggle_attendance(authorization: Optional[str] = Header(None)):
             })
         return {"status": "checked_out", "message": f"Checked out successfully, {emp['name']}."}
     else:
-        # Check in
         emp["attendance_state"] = "checked_in"
         emp["last_check_in"] = cur_time_str
         emp["worked_hours"] = 0.5
@@ -1042,7 +802,7 @@ def index_page():
                     <div class="demo-pills">
                         <div class="demo-pills-title">
                             <span><i class="fa-solid fa-bolt-lightning" style="color:var(--warning);"></i> 1-Click Quick Sign In Accounts</span>
-                            <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">4 accounts</span>
+                            <span style="font-size:0.65rem;color:var(--primary-light);" id="usersCountBadge">1 account</span>
                         </div>
                         <div class="pill-grid" id="quickUsersList">
                             <!-- Populated dynamically -->
@@ -1076,7 +836,7 @@ def index_page():
             <a class="nav-item" onclick="switchTab('leaves')">
                 <i class="fa-solid fa-calendar-check"></i>
                 <span>Time-Off &amp; Leaves</span>
-                <span class="nav-badge" id="pendingBadge" style="display:none;">1</span>
+                <span class="nav-badge" id="pendingBadge" style="display:none;">0</span>
             </a>
             <a class="nav-item" onclick="switchTab('employees')">
                 <i class="fa-solid fa-users"></i>
@@ -1116,7 +876,7 @@ def index_page():
             <div class="header-actions">
                 <div class="status-chip" id="headerStatusChip">
                     <div class="status-dot"></div>
-                    <span id="headerStatusText">Checked In</span>
+                    <span id="headerStatusText">Checked Out</span>
                 </div>
 
                 <!-- HR ONLY: CREATE EMPLOYEE BUTTON -->
@@ -1142,11 +902,11 @@ def index_page():
                 <div class="attendance-toggle-box">
                     <div class="time-display">
                         <span class="label">Worked Today</span>
-                        <span class="value" id="workedTimer">03:24:10</span>
+                        <span class="value" id="workedTimer">0.0 hrs</span>
                     </div>
                     <button class="btn btn-primary" id="toggleAttendanceBtn" onclick="toggleAttendance()">
                         <i class="fa-solid fa-fingerprint"></i>
-                        <span id="attendanceBtnLabel">Check Out</span>
+                        <span id="attendanceBtnLabel">Check In</span>
                     </button>
                 </div>
             </div>
@@ -1165,7 +925,7 @@ def index_page():
                             <span class="metric-title">Total Employees</span>
                             <div class="metric-icon icon-blue"><i class="fa-solid fa-users"></i></div>
                         </div>
-                        <div class="metric-value" id="mTotalEmps">4</div>
+                        <div class="metric-value" id="mTotalEmps">1</div>
                         <div class="metric-sub">Organization wide</div>
                     </div>
                     <div class="metric-card">
@@ -1173,15 +933,15 @@ def index_page():
                             <span class="metric-title">Present Today</span>
                             <div class="metric-icon icon-green"><i class="fa-solid fa-user-check"></i></div>
                         </div>
-                        <div class="metric-value" id="mPresentEmps">2</div>
-                        <div class="metric-sub" id="mPresentPct">50% active attendance</div>
+                        <div class="metric-value" id="mPresentEmps">0</div>
+                        <div class="metric-sub" id="mPresentPct">0% active attendance</div>
                     </div>
                     <div class="metric-card">
                         <div class="metric-header">
                             <span class="metric-title">On Leave</span>
                             <div class="metric-icon icon-yellow"><i class="fa-solid fa-umbrella-beach"></i></div>
                         </div>
-                        <div class="metric-value" id="mOnLeave">1</div>
+                        <div class="metric-value" id="mOnLeave">0</div>
                         <div class="metric-sub">Sick &amp; PTO</div>
                     </div>
                     <div class="metric-card">
@@ -1353,6 +1113,9 @@ def index_page():
                                 <button class="btn btn-secondary" style="justify-content:flex-start;" onclick="switchTab('profile')">
                                     <i class="fa-solid fa-user-pen" style="color:var(--success);"></i> Update My Profile Details
                                 </button>
+                                <button class="btn btn-danger" style="justify-content:flex-start;margin-top:0.4rem;font-size:0.8rem;" onclick="handleResetAllData()">
+                                    <i class="fa-solid fa-trash-can"></i> Reset Database (Clear Test Data)
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -1376,7 +1139,7 @@ def index_page():
                     </div>
                     <div style="display:flex;align-items:center;gap:1rem;">
                         <button class="btn btn-primary" onclick="toggleAttendance()">
-                            <i class="fa-solid fa-fingerprint"></i> <span id="attBannerBtnLabel">Check Out</span>
+                            <i class="fa-solid fa-fingerprint"></i> <span id="attBannerBtnLabel">Check In</span>
                         </button>
                     </div>
                 </div>
@@ -1651,7 +1414,7 @@ def index_page():
 
                 <div class="form-group">
                     <label>Employee Name &amp; ID</label>
-                    <div class="copy-box"><span id="succEmpName">Kavitha Murugan (DF-1005)</span></div>
+                    <div class="copy-box"><span id="succEmpName">Kavitha Murugan (DF-1002)</span></div>
                 </div>
 
                 <div class="form-group">
@@ -1758,7 +1521,7 @@ def index_page():
                 const users = await res.json();
                 const container = document.getElementById('quickUsersList');
                 const badge = document.getElementById('usersCountBadge');
-                if (badge) badge.innerText = `${users.length} accounts`;
+                if (badge) badge.innerText = `${users.length} account${users.length === 1 ? '' : 's'}`;
                 if (!container) return;
 
                 container.innerHTML = users.map(u => `
@@ -1900,6 +1663,20 @@ def index_page():
             showToast(data.message);
             alert(`✅ Password Updated for ${name}!\n\nEmail: ${email}\nNew Password: ${newPw}`);
             fetchState();
+        }
+
+        async function handleResetAllData() {
+            if (!confirm("Are you sure you want to clear all test records and reset to clean database?")) return;
+            const res = await fetch('/api/admin/reset_all_data', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${sessionToken}` }
+            });
+            const data = await res.json();
+            if (res.ok) {
+                showToast("Database cleared and reset to fresh state!");
+                fetchState();
+                populateQuickUsers();
+            }
         }
 
         async function handleLogout() {
@@ -2060,7 +1837,6 @@ def index_page():
                 roleBadge.innerHTML = '<i class="fa-solid fa-shield-halved"></i> HR Admin';
                 rbacNotice.innerHTML = `<strong>RBAC Role: HR Director / Administrator.</strong> Full organizational access and employee provisioning privileges.`;
                 
-                // Show Admin metrics and tables
                 document.getElementById('adminMetricsGrid').style.display = 'grid';
                 document.getElementById('employeeMetricsGrid').style.display = 'none';
                 document.getElementById('pendingApprovalsCard').style.display = 'flex';
@@ -2077,14 +1853,12 @@ def index_page():
                 roleBadge.innerHTML = '<i class="fa-solid fa-user"></i> Employee';
                 rbacNotice.innerHTML = `<strong>RBAC Role: Employee (${emp ? emp.job_title : 'Team Member'}).</strong> Self-isolated data scope.`;
                 
-                // Show Employee personal metrics and tables
                 document.getElementById('adminMetricsGrid').style.display = 'none';
                 document.getElementById('employeeMetricsGrid').style.display = 'grid';
                 document.getElementById('pendingApprovalsCard').style.display = 'none';
                 document.getElementById('hrRecentLoginsCard').style.display = 'none';
                 document.getElementById('empLeavesHistoryCard').style.display = 'flex';
 
-                // Populate Employee personal metrics
                 document.getElementById('empWorkedHoursMetric').innerText = em.worked_today || '0.0 hrs';
                 document.getElementById('empAttendanceStatusSub').innerText = `Status: ${emp && emp.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}`;
                 document.getElementById('empPtoMetric').innerText = `${em.pto_balance} Days`;
@@ -2139,7 +1913,7 @@ def index_page():
             // Pending Leaves Queue (HR)
             const ptBody = document.getElementById('pendingLeavesTable');
             if (appState.pending_leaves.length === 0) {
-                ptBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No pending leave approvals in queue! 🎉</td></tr>`;
+                ptBody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted);">No pending leave approvals in queue. All clear!</td></tr>`;
             } else {
                 ptBody.innerHTML = appState.pending_leaves.map(l => `
                     <tr>
@@ -2215,7 +1989,7 @@ def index_page():
                 `;
             }
 
-            // Attendance Logs Table (with Empty State fallback)
+            // Attendance Logs Table
             const attTable = document.getElementById('attendanceLogsTable');
             if (!appState.attendance_logs || appState.attendance_logs.length === 0) {
                 attTable.innerHTML = `
@@ -2256,59 +2030,69 @@ def index_page():
             }
 
             const allLeavesTable = document.getElementById('allLeavesTable');
-            allLeavesTable.innerHTML = appState.all_leaves.map(l => {
-                let badgeCls = 'badge-pending';
-                if (l.state === 'validate') badgeCls = 'badge-approved';
-                if (l.state === 'refuse') badgeCls = 'badge-refused';
-                return `
-                    <tr>
-                        <td><strong>${l.employee_name}</strong> (${l.dayflow_emp_id})</td>
-                        <td>${l.type}</td>
-                        <td>${l.date_from} &rarr; ${l.date_to}</td>
-                        <td>${l.number_of_days} Days</td>
-                        <td><span class="badge ${badgeCls}">${l.state_label}</span></td>
-                        <td>${l.remarks}</td>
-                        <td><span style="color:var(--primary-light);font-size:0.8rem;">${l.manager_comment || '—'}</span></td>
-                    </tr>
-                `;
-            }).join('');
+            if (allLeavesTable) {
+                if (!appState.all_leaves || appState.all_leaves.length === 0) {
+                    allLeavesTable.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:2rem;color:var(--text-muted);">No leave records found. Click <strong>Request Time-Off</strong> to submit!</td></tr>`;
+                } else {
+                    allLeavesTable.innerHTML = appState.all_leaves.map(l => {
+                        let badgeCls = 'badge-pending';
+                        if (l.state === 'validate') badgeCls = 'badge-approved';
+                        if (l.state === 'refuse') badgeCls = 'badge-refused';
+                        return `
+                            <tr>
+                                <td><strong>${l.employee_name}</strong> (${l.dayflow_emp_id})</td>
+                                <td>${l.type}</td>
+                                <td>${l.date_from} &rarr; ${l.date_to}</td>
+                                <td>${l.number_of_days} Days</td>
+                                <td><span class="badge ${badgeCls}">${l.state_label}</span></td>
+                                <td>${l.remarks}</td>
+                                <td><span style="color:var(--primary-light);font-size:0.8rem;">${l.manager_comment || '—'}</span></td>
+                            </tr>
+                        `;
+                    }).join('');
+                }
+            }
 
             const empsTable = document.getElementById('employeesTable');
-            empsTable.innerHTML = appState.all_employees.map(e => `
-                <tr>
-                    <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
-                    <td><strong>${e.name}</strong></td>
-                    <td>${e.job_title}</td>
-                    <td>${e.department}</td>
-                    <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
-                    <td>${e.private_city}</td>
-                    <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
-                    <td>
-                        ${isAdm ? `
-                            <div style="display:flex;gap:0.4rem;align-items:center;">
-                                <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
-                                    <i class="fa-solid fa-key"></i> Reset Pwd
-                                </button>
-                            </div>
-                        ` : `<span style="font-size:0.75rem;color:var(--text-muted);">Active</span>`}
-                    </td>
-                </tr>
-            `).join('');
+            if (empsTable) {
+                empsTable.innerHTML = appState.all_employees.map(e => `
+                    <tr>
+                        <td><strong style="font-family:'JetBrains Mono';color:var(--primary-light);">${e.dayflow_emp_id}</strong></td>
+                        <td><strong>${e.name}</strong></td>
+                        <td>${e.job_title}</td>
+                        <td>${e.department}</td>
+                        <td><a href="mailto:${e.work_email}" style="color:var(--primary-light);text-decoration:none;font-weight:600;">${e.work_email}</a></td>
+                        <td>${e.private_city}</td>
+                        <td><span class="badge ${e.attendance_state === 'checked_in' ? 'badge-approved' : 'badge-pending'}">${e.attendance_state === 'checked_in' ? 'Checked In' : 'Checked Out'}</span></td>
+                        <td>
+                            ${isAdm ? `
+                                <div style="display:flex;gap:0.4rem;align-items:center;">
+                                    <button class="btn btn-secondary" style="padding:0.25rem 0.55rem;font-size:0.75rem;" onclick="handleResetPassword('${e.work_email}', '${e.name}')">
+                                        <i class="fa-solid fa-key"></i> Reset Pwd
+                                    </button>
+                                </div>
+                            ` : `<span style="font-size:0.75rem;color:var(--text-muted);">Active</span>`}
+                        </td>
+                    </tr>
+                `).join('');
+            }
 
             const salTable = document.getElementById('salaryTable');
-            salTable.innerHTML = appState.salary_records.map(e => `
-                <tr>
-                    <td><strong>${e.name}</strong></td>
-                    <td>${e.dayflow_emp_id}</td>
-                    <td><strong style="color:var(--success);font-size:0.95rem;">$${e.salary_amount.toLocaleString()}.00</strong></td>
-                    <td>${e.salary_type}</td>
-                    <td>${e.bank_name}</td>
-                    <td><span style="font-family:'JetBrains Mono'">${e.bank_account_no}</span></td>
-                    <td>
-                        ${isAdm ? `<button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>` : `<span style="font-size:0.75rem;color:var(--text-muted);"><i class="fa-solid fa-lock"></i> Confidential</span>`}
-                    </td>
-                </tr>
-            `).join('');
+            if (salTable) {
+                salTable.innerHTML = appState.salary_records.map(e => `
+                    <tr>
+                        <td><strong>${e.name}</strong></td>
+                        <td>${e.dayflow_emp_id}</td>
+                        <td><strong style="color:var(--success);font-size:0.95rem;">$${e.salary_amount.toLocaleString()}.00</strong></td>
+                        <td>${e.salary_type}</td>
+                        <td>${e.bank_name}</td>
+                        <td><span style="font-family:'JetBrains Mono'">${e.bank_account_no}</span></td>
+                        <td>
+                            ${isAdm ? `<button class="btn btn-secondary" style="padding:0.25rem 0.6rem;font-size:0.75rem;" onclick="promptSalaryEdit(${e.id}, ${e.salary_amount})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>` : `<span style="font-size:0.75rem;color:var(--text-muted);"><i class="fa-solid fa-lock"></i> Confidential</span>`}
+                        </td>
+                    </tr>
+                `).join('');
+            }
 
             if (emp) {
                 document.getElementById('profWorkPhone').value = emp.work_phone || '';
@@ -2355,9 +2139,9 @@ if __name__ == "__main__":
     print("===============================================================")
     print(f">> Dayflow HRMS Server is starting on http://127.0.0.1:{port}")
     print(">> Features:")
-    print("   * Dynamic User Discovery in Login Modal")
-    print("   * Rich Employee Dashboard with personal leave metrics & status")
-    print("   * Rich HR Admin Dashboard with organization metrics & directory")
-    print("   * Real-time Attendance Check-in & Provisioning")
+    print("   * Clean Fresh Database - Ready for New Employees")
+    print("   * Master HR Administrator: alex.morgan@dayflow.demo / dayflow123")
+    print("   * Create New Employee & Email ID with Password Generator")
+    print("   * Real-time Attendance Check-in & Time-off Management")
     print("===============================================================")
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
